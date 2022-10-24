@@ -1,0 +1,592 @@
+{
+  "id": "r0",
+  "description": "#s0",
+  "persons": [
+    {
+      "id": "p0",
+      "extracted": true,
+      "principal": true,
+      "gender": {
+        "type": "http://gedcomx.org/Male"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Edmond Harper",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Edmond"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Harper"
+                }
+              ]
+            }
+          ],
+          "id": "g3jl861bm"
+        }
+      ],
+      "facts": [
+        {
+          "id": "l22go2y5x",
+          "type": "http://gedcomx.org/Will",
+          "primary": false,
+          "date": {
+            "original": "27 August 1810"
+          },
+          "place": {
+            "original": "Elbert, Georgia"
+          }
+        }
+      ]
+    },
+    {
+      "id": "p2",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Ann Harper",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Ann"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Harper"
+                }
+              ]
+            }
+          ],
+          "id": "80lo0a8pj"
+        }
+      ]
+    },
+    {
+      "id": "p3",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Elizabeth"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Darden"
+                }
+              ],
+              "fullText": "Elizabeth Darden"
+            }
+          ],
+          "id": "ccmwptffc",
+          "type": null
+        }
+      ]
+    },
+    {
+      "id": "p4",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Drucilla Harper",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Drucilla"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Harper"
+                }
+              ]
+            }
+          ],
+          "id": "46co9i6hy"
+        }
+      ]
+    },
+    {
+      "id": "p5",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Male"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Bedford Harper",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Bedford"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Harper"
+                }
+              ]
+            }
+          ],
+          "id": "sdh6tpu70"
+        }
+      ]
+    },
+    {
+      "id": "p6",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Elender Harper",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Elender"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Harper"
+                }
+              ]
+            }
+          ],
+          "id": "vg58wcwef"
+        }
+      ]
+    },
+    {
+      "id": "p8",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Beverly Allen",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Beverly"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Allen"
+                }
+              ]
+            }
+          ],
+          "id": "xou68otye"
+        }
+      ]
+    },
+    {
+      "id": "p9",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Male"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "John Alston",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "John"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Alston"
+                }
+              ]
+            }
+          ],
+          "id": "udqjjvc6j"
+        }
+      ]
+    },
+    {
+      "id": "p10",
+      "extracted": true,
+      "gender": {
+        "type": "http://gedcomx.org/Male"
+      },
+      "names": [
+        {
+          "nameForms": [
+            {
+              "fullText": "Adam Gaar",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Adam"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Gaar"
+                }
+              ]
+            }
+          ],
+          "id": "36m0r98zp"
+        }
+      ]
+    },
+    {
+      "id": "p_999773043194",
+      "extracted": true,
+      "principal": false,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "id": "h9wlountx",
+          "type": null,
+          "nameForms": [
+            {
+              "fullText": "Mary Jones",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Mary"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Jones"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "facts": []
+    },
+    {
+      "id": "p_999331554880",
+      "extracted": true,
+      "principal": false,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "id": "ocrs3rcmn",
+          "type": null,
+          "nameForms": [
+            {
+              "fullText": "Lucy Howard",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Lucy"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Howard"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "facts": []
+    },
+    {
+      "id": "p_999170189836",
+      "extracted": true,
+      "principal": false,
+      "gender": {
+        "type": "http://gedcomx.org/Female"
+      },
+      "names": [
+        {
+          "id": "j1j2uylwz",
+          "type": null,
+          "nameForms": [
+            {
+              "fullText": "Ann Rucker",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Ann"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Rucker"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "facts": []
+    },
+    {
+      "id": "p_999818334676",
+      "extracted": true,
+      "principal": false,
+      "gender": {
+        "type": "http://gedcomx.org/Male"
+      },
+      "names": [
+        {
+          "id": "i51kyctj4",
+          "type": null,
+          "nameForms": [
+            {
+              "fullText": "Dudly Sale",
+              "parts": [
+                {
+                  "type": "http://gedcomx.org/Given",
+                  "value": "Dudly"
+                },
+                {
+                  "type": "http://gedcomx.org/Surname",
+                  "value": "Sale"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "facts": []
+    }
+  ],
+  "relationships": [
+    {
+      "type": "http://gedcomx.org/Couple",
+      "person1": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "person2": {
+        "resource": "#p2",
+        "resourceId": "p2"
+      },
+      "facts": [
+        {
+          "type": "http://gedcomx.org/Marriage",
+          "id": "nd8zugvm1"
+        }
+      ],
+      "id": "egvhwq9oh"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "person2": {
+        "resource": "#p3",
+        "resourceId": "p3"
+      },
+      "id": "duy0ncsc2"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "person2": {
+        "resource": "#p4",
+        "resourceId": "p4"
+      },
+      "id": "jojkk67il"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "person2": {
+        "resource": "#p5",
+        "resourceId": "p5"
+      },
+      "id": "1k2mxv7ua"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "person2": {
+        "resource": "#p6",
+        "resourceId": "p6"
+      },
+      "id": "53l22vm26"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p2",
+        "resourceId": "p2"
+      },
+      "person2": {
+        "resource": "#p3",
+        "resourceId": "p3"
+      },
+      "id": "fntwbybhp"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p2",
+        "resourceId": "p2"
+      },
+      "person2": {
+        "resource": "#p4",
+        "resourceId": "p4"
+      },
+      "id": "q9thrdldr"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p2",
+        "resourceId": "p2"
+      },
+      "person2": {
+        "resource": "#p5",
+        "resourceId": "p5"
+      },
+      "id": "k8oflmuwh"
+    },
+    {
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resource": "#p2",
+        "resourceId": "p2"
+      },
+      "person2": {
+        "resource": "#p6",
+        "resourceId": "p6"
+      },
+      "id": "anfnrylec"
+    },
+    {
+      "type": "http://familysearch.org/types/relationships/NonRelative",
+      "person1": {
+        "resource": "#p8",
+        "resourceId": "p8"
+      },
+      "person2": {
+        "resource": "#p0",
+        "resourceId": "p0"
+      },
+      "id": "mhh70lhed"
+    },
+    {
+      "id": "6k46fthn8",
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resourceId": "p0",
+        "resource": "#p0"
+      },
+      "person2": {
+        "resourceId": "p_999773043194",
+        "resource": "#p_999773043194"
+      }
+    },
+    {
+      "id": "pw3lho4rf",
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resourceId": "p0",
+        "resource": "#p0"
+      },
+      "person2": {
+        "resourceId": "p_999331554880",
+        "resource": "#p_999331554880"
+      }
+    },
+    {
+      "id": "q4evv6kxu",
+      "type": "http://gedcomx.org/ParentChild",
+      "person1": {
+        "resourceId": "p0",
+        "resource": "#p0"
+      },
+      "person2": {
+        "resourceId": "p_999170189836",
+        "resource": "#p_999170189836"
+      }
+    }
+  ],
+  "sourceDescriptions": [
+    {
+      "id": "s0",
+      "about": "#r0",
+      "resourceType": "http://gedcomx.org/Record",
+      "coverage": [
+        {
+          "recordType": "http://gedcomx.org/Will",
+          "temporal": {
+            "original": "27 August 1810"
+          },
+          "spatial": {
+            "original": "Elbert, Georgia"
+          }
+        }
+      ],
+      "sources": [
+        {
+          "description": "#src_nbx",
+          "descriptionId": "src_nbx"
+        }
+      ]
+    },
+    {
+      "id": "src_nbx",
+      "about": "#nbx",
+      "identifiers": {
+        "$": [
+          "#nbx"
+        ]
+      }
+    }
+  ],
+  "documents": [
+    {
+      "id": "nbx",
+      "text": "<NBX>\n<UNQ>007650955_00090_TXT</UNQ>\n<SBODY>\n7 6\nWill of Edmond Harper\nElbert Co., Ga., Will Book L ( 1816-1821), pages 245 £ 246\nIn the name of God Amen I Edmond Harper of the State of Georgia and\nCounty of Elbert Being of Sound and disposing mind memory and under-\nstanding do make publish and declare this my last Will and Testament\nin manner following That is to Say, first I give and bequeath to my\nwife Ann Harper one Eighth part of my Estate both real and personal,\nSecondly I give and bequeath to my Daughters Elizabeth Darden Mary\nJones Lucy Howard Ann Rucker and Drucilla Harper the sum of one\ndollar Each Thirdly I Give and bequeath to my son Bedford Harper\nand my Daughter Elender Harper two tracts of land in the County of\nWilkerson that is to say one in the ninth District and known by a plan\nof Said District by Lot Number fifty Eight and the other in the Twenty\nsisth District of said County and known by Lot Number Two hundred and\nSix. Fourthly, I give and bequeath all the balance of my Estate not\nabove Specially Willed to my aforesaid Son Bedford Harper and Daughter\nEllender Harper and my friend Beverly Allen to be Equally divided\namongst the three, fifthly and lastly I constitute and appoint my\nbeloved Son Bedford Harper and my true and trusty Friend Beverly Allen\nmy Executors to this my last Will and Testament hereby revoking all\nFormer and other Wills and testaments by me at any time heretofore\nmade, and I do declare this to be my last Will and testament In Witness\nWhereof to this my said Will I have set my hand and Seal the twenty-\nseventy day of August in the year of our Lord one thousand Eight Hundred\nand ten and of American Independence the thirty fifth - Signed Sealed\nPublished and declared in the presence of\nJohn Alston\nEdmund Harper\nDudly Sale\nAdam Gaar\n</SBODY>\n</NBX>\n",
+      "titles": [
+        {
+          "value": "007650955_00090.jpg.txt"
+        }
+      ]
+    }
+  ]
+}

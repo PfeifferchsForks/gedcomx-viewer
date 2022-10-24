@@ -1,0 +1,49 @@
+<!-- Instructions for tree navigation -->
+<div id="tree-graph-help"><button onclick="toggleTreeGraphHelp()" style="float: right">Help</button></div>
+<div id="tree-graph-help-content" style="float: right; background-color: rgba(237,237,248,0.9); z-index: 500">
+  <div style="float: none">
+    <div style="background-color: rgba(222,222,236,0.9)"><strong>Family Tree Browser</strong><div style="display: inline; float: right;">
+      <button onclick="toggleTreeGraphHelp()">X</button></div></div>
+    <ul>
+      <li>Sign in to <a href="https://www.familysearch.org" target="_blank">FamilySearch</a> (or add 'sessionId=&lt;sessionId&gt;' to URL)</li>
+      <li>It will start with your person ID in Family Tree.
+        <ul>
+          <li>add 'pid=&lt;personId&gt;' to the URL to start with a different person ID<br>(like "...tree-graph.html?pid=KWCH-LVC")</li>
+          <li>or 'url=&lt;personUrl&gt;' for a Genealogies person URL.
+            <ul><li>(use prefetch=100 to recursively prefetch up to 100 relatives to start with).</li></ul>
+          </li>
+          <li>add "big=true" to get a bunch of relatives to start with.</li>
+          <li>or add something like "generations=2,1,1.5,1,0,0" to have that many generations of descendants for each generation back.
+            <ul>
+              <li>0 means just include that generation (of ancestors)</li>
+              <li>1 means children of that generation, so siblings, uncles, great-uncles, etc.</li>
+              <li>1.5 means spouses of that generation, so siblings and their spouses, or children and their spouses (but not children), etc.</li>
+            </ul>
+          </li>
+        </ul>
+      <li>Click grey arrows to expand relatives, and light grey ones to hide them.</li>
+      <li>Shift-Cmd(or Ctrl)-click a person to open them in a new tab in FamilySearch <strong>Family Tree</strong>.</li>
+      <li><strong>Selecting persons</strong> (so expanding relatives works on all of them at once):
+        <ul>
+          <li>Click a person to select them.</li>
+          <li>Shift-click to select list of persons in a generation.</li>
+          <li>Command(or Control)-click to select/deselect disconnected persons.</li>
+        </ul></li>
+      <li><strong>Keyboard shortcuts:</strong>
+        <ul>
+          <li>I - Toggle whether to show person IDs.</li>
+          <li>D - Toggle whether to show person Details (on selected persons, or on all if none selected)</li>
+          <li>L - Toggle whether to coLlapse persons.</li>
+          <li>R - Refresh data (after you make a change in Family Tree)</li>
+        </ul></li>
+      <li><strong>Keyboard shortcuts on selected person(s):</strong>
+        <ul>
+          <li>1 - Who to make the main ("#1") person in the chart. Center on this person.</li>
+          <li>M - Hide the selected persons ("Me").</li>
+          <li>P, S, C - Show the Parents, Spouses or Children of the selected person(s).</li>
+          <li>Shift-P, S, C - Hide the Parents, Spouses or Children of the selected person(s).</li>
+        </ul></li>
+      <li><strong>Drag</strong> background of person chart (or this help box) to move it around, and/or use scrollbars.</li>
+    </ul>
+  </div>
+</div>

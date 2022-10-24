@@ -1,0 +1,3573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GEDCOM X Viewer</title>
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/open-iconic/1.1.1/font/css/open-iconic-bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/5.14.0/jsoneditor.min.css">
+  <link rel="stylesheet" href="gx-view.css">
+  <link rel="stylesheet" type="text/css" href="graph/graph.css">
+
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsoneditor/5.14.0/jsoneditor.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-filestyle/2.1.0/bootstrap-filestyle.min.js"></script>
+
+  <!-- Relationship Graph support -->
+  <script src="gx-util.js"></script>
+  <script src="graph/model/model-util.js"></script>
+  <script src="graph/model/PersonNode.js"></script>
+  <script src="graph/model/FamilyNode.js"></script>
+  <script src="graph/model/RelationshipGraph.js"></script>
+
+  <script src="graph/view/Generation.js"></script>
+  <script src="graph/view/LinkedHashSet.js"></script>
+  <script src="graph/view/IntegerByRef.js"></script>
+  <script src="graph/view/PersonBox.js"></script>
+  <script src="graph/view/FamilyLine.js"></script>
+  <script src="graph/view/ChartCompressor.js"></script>
+  <script src="graph/view/RelationshipChart.js"></script>
+  <script src="graph/view/RelChartBuilder.js"></script>
+  <script src="graph/view/EditChart.js"></script>
+
+  <script src="graph/graph.js"></script>
+  <script src="gx-fix.js"></script>
+  <script src="gx-view.js"></script>
+  <script>
+    //      let personaUrl = "https://familysearch.org/ark:/61903/1:1:XF48-HFC";
+    //      let recordUrl = "https://familysearch.org/ark:/61903/1:2:99FJ-7LXP";
+    //      let gedcomxUrl = "https://www.familysearch.org/ark:/61903/1:1:XTWB-H9T"; // marriage record
+    //      let gedcomxUrl = "https://www.familysearch.org/ark:/61903/1:1:QK2M-H538"; // obituary
+
+    /**
+     * The GEDCOM X editor
+     *
+     * @type JSONEditor
+     */
+    let editor = null;
+
+    /**
+     * The current selection of the GEDCOM X editor.
+     *
+     * @type Node
+     */
+    let editorSelection = null;
+
+    /**
+     * The current record URL.
+     *
+     * @type string
+     */
+    let currentUrl = null;
+
+    let sourceDocumentText = null;
+    let sourceDocumentName = null;
+
+    let editHooks = {};
+
+    /**
+     * Show a record.
+     *
+     * @param doc The doc to show.
+     * @param url The URL of the record, if applicable.
+     */
+    function showRecord(doc, url) {
+      let el = $("#record");
+      el.empty();
+      el.append(buildRecordUI(doc, url, editHooks));
+      currentUrl = url;
+
+      //add all the node-path selection logic
+      $("*[json-node-path]").addClass("gx-node-select").click(function() {
+        findRecordNode($(this).attr("json-node-path"));
+      });
+    }
+    /* == RecordInfo ===
+      A RecordInfo object holds information about one record, as well as its corresponding text section, if any.
+      - Every text section will correspond to one RecordInfo.
+      - Each RecordInfo will contain one GedcomX record (possibly an empty one like "{}").
+      - Each RecordInfo can correspond to a text section, or can have no corresponding text section (yet).
+      Common flows:
+      - Load new GedcomX record => text cleared; One RecordInfo that points to the new record and no text section.
+      - Load new Record Set     => text cleared; Array of RecordInfo (one per record in the record set), none of which point to a text section.
+      - Load text when no Gx record exists yet => One RecordInfo with empty ({}) record, which corresponds to the one text section.
+      - Split text section => insert a RecordInfo after the one that corresponds to the current text section. Empty record that corresponds to new section.
+        - Eventually, look to see if the following RecordInfo (a) has no corresponding text section yet, and (b) has names that appear in the new section.
+          If so, then associate the record there. This is especially helpful to "undo" an accidental delete of a section break.
+      - Merge text section => merge persons and records from the second RecordInfo into the first one, and delete the second one from the array.
+      - Load text when Gx record or record set already loaded:
+        - If one text section and one record, then point the first (and only) RecordInfo at the first (and only) text section.
+        - If one text section and >1 record, then point the first RecordInfo at the first (and only) text section
+          (User will have to split text section and drag other records over to them).
+        - If multiple text sections, then create an empty record for each, and user must drag the records to the correct sections.
+          (Eventually, create alignment code that looks at words in each section and names in each record to try to line them up)
+      So a RecordInfo may have a null sectionId, but all text sections should have exactly one RecordInfo that points at it.
+    */
+    // Array of RecordInfo objects, one for each GedcomX record being edited, possibly from a multi-record article, such as a birth list.
+    let recordInfos = [];
+    let currentRecordIndex = 0; // Index in recordInfos[] of the currently-selected record.
+
+    //MAYBE: have an array of RecordInfo objects, each with:
+    //  - gxRecord
+    //  - Summary (name of first principal or first person in record)
+    //  - sectionId of corresponding text section, if identified. null => don't know what text section it goes with.
+
+    // Current GedcomX record object, used by the pop-up bounding box window to get access to the record and image data.
+    function getCurrentGx() {
+      return editor.get();
+    }
+
+    // Relationship chart for the current GedcomX
+    let relChart;
+
+    let imageChildWindow;
+    let entityChildWindow;
+    let dirty = false;
+
+    function makeEmptyRecord() {
+      let gxRecord = {};
+      getOrAddMainSourceDescription(gxRecord);
+      return gxRecord;
+    }
+    
+    function RecordInfo(sectionId, gxRecord) {
+      this.gxRecord = hasRecordData(gxRecord) ? gxRecord : makeEmptyRecord();
+
+      // Get an array of (lower case) full text strings from all the name forms of all the people in the given record.
+      function getRecordNames(doc) {
+        let names = [];
+        if (doc.persons) {
+          for (let person of doc.persons) {
+            if (person.names) {
+              for (let name of person.names) {
+                if (name.nameForms) {
+                  for (let nameForm of name.nameForms) {
+                    if (nameForm.fullText && nameForm.fullText.length > 0) {
+                      names.push(nameForm.fullText.toLowerCase());
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        return names;
+      }
+
+      this.names = getRecordNames(this.gxRecord);
+      this.summary = this.names.length > 0 ? this.names[0] : "<NoNames>";
+      // id of contenteditable <div> that corresponds to this record (if any so far).
+      this.sectionId = sectionId;
+    }
+
+    // Array of previous copies of the GedcomX RecordSet and text sections before a set of changes was made.
+    // [0] is the original GedcomX. Each time the graph is built, a copy of the latest GedcomX is added to the array (if isEditable is true).
+    let recordSetChangeHistory = [];
+    // Position in recordSetChangeHistory. Normally recordSetChangeHistory = recordSetChangeHistory.length.
+    // But if 'undo' has been done, it can be earlier. If 'redo' is done before any further changes, then it advances again.
+    // If a change is made when this position is not at the end, then all following elements are removed.
+    let recordSetChangePosition = 0;
+
+    function undoRecordSet() {
+      if (recordSetChangePosition > 1) {
+        let backupStr = recordSetChangeHistory[--recordSetChangePosition - 1];
+        recoverRecordSetFromBackupString(backupStr);
+      }
+    }
+
+    function redoRecordSet() {
+      if (recordSetChangePosition < recordSetChangeHistory.length) {
+        let backupStr = recordSetChangeHistory[recordSetChangePosition++];
+        recoverRecordSetFromBackupString(backupStr);
+      }
+    }
+
+    function updateRecordSetUndo(backupStr) {
+      recordSetChangeHistory[recordSetChangePosition++] = backupStr;
+      if (recordSetChangePosition < recordSetChangeHistory.length) {
+        // Did a change after doing multiple "undos". So ignore the rest of the change history.
+        recordSetChangeHistory.length = recordSetChangePosition;
+      }
+    }
+
+    function handleEditorKeydown(e) {
+      if (!$(document.activeElement).is(":input,[contenteditable]")) {
+        let key = e.key.toUpperCase();
+        if (e.ctrlKey || e.metaKey) {
+          // Handle ctrl/cmd keydown
+          if ((key === 'Z' && e.shiftKey) || key === 'Y') {
+            // Ctrl/Cmd-shift Z or Cmd-Y => Redo
+            redoRecordSet();
+            e.stopPropagation();
+            e.preventDefault(); // Prevent browser from treating Cmd-Y as "Show all history".
+          }
+          else if (key === 'Z') { // lower-case z, no shift
+            // Ctrl/Cmd-Z => Undo
+            undoRecordSet();
+            e.stopPropagation();
+            e.preventDefault();
+          }
+        }
+      }
+    }
+
+    /**
+     *  Having made a change to the given record, update the display of it.
+     *
+     *  @param doc The record to update.
+     *  @param url (optional) The url or filename of the record, if applicable. (Ignored if null)
+     *  @param editorAlreadyUpdated (optional) Flag for whether the 'editor' is already updated (avoids closing editor when it is being edited still).
+     *  @param isClean - flag for whether this is a fresh update of the record, so the dirty bit should be cleared rather than set (like usual).
+     *  @param fromUndoLog - flag for whether this update is coming from the undo history, in which case the undo history should not be updated.
+     */
+    function updateRecord(doc, url, editorAlreadyUpdated, isClean, fromUndoLog) {
+      url = url ? url : currentUrl;
+      currentUrl = url;
+      if (doc.records && doc.records.length > 0) {
+        doc = doc.records[0];
+      }
+      if (typeof recordInfos !== 'undefined' && currentRecordIndex >= 0 && currentRecordIndex < recordInfos.length) {
+        recordInfos[currentRecordIndex].gxRecord = doc;
+      }
+      dirty = !isClean;
+      let backup = {
+        "doc": doc,
+        "url": url,
+        "text": sourceDocumentText,
+        "filename": sourceDocumentName,
+        "recordInfos" : recordInfos,
+        "currentRecordIndex" : currentRecordIndex,
+        "textSections" : getTextSections()
+      }
+
+      let backupStr = JSON.stringify(backup);
+      sessionStorage.setItem("Gx-Backup", backupStr);
+      localStorage.setItem("Gx-Backup.localStorage", backupStr);
+      if (!fromUndoLog) {
+        updateRecordSetUndo(backupStr);
+      }
+
+      if (!editorAlreadyUpdated) {
+        editor.set(doc);
+        $("#source-viewer").show();
+      }
+
+      let sftSummaryHtml = getSftSummaryHtml(doc);
+      if (sftSummaryHtml) {
+        $("#sft-summary").html(sftSummaryHtml);
+      }
+
+      function getImageLink(doc) {
+        // todo: Include coordinates and handle multiple images.
+        // let imageArksAndRectangles = getImageArks(doc);
+        // if (!isEmpty(imageArksAndRectangles)) {
+        //   return imageArksAndRectangles[0].url;
+        // }
+        // return null; // No image link found
+        return getImageArks(doc) ? "bbox/bbox.html" : null;
+      }
+
+      let imageLink = getImageLink(doc);
+      if (imageLink) {
+        $("#image-link").html('<a href="' + imageLink + '?currentUrl=' + currentUrl + '" target="reusable_image_viewer_tab">View image</a>');
+        if (imageChildWindow && imageChildWindow.location && !imageChildWindow.closed && !imageChildWindow.location.href.endsWith(currentUrl)) {
+          // Automatically load the image into the image viewer if it is already open.
+          window.open(imageLink + '?currentUrl=' + currentUrl, "reusable_image_viewer_tab");
+        }
+      }
+
+      $("#nbx-link").html('<a href="nbx/nbx.html?currentUrl=' + currentUrl + '" target="reusable_entity_tab">View entities</a>');
+      if (entityChildWindow && entityChildWindow.location && !entityChildWindow.closed && !entityChildWindow.location.href.endsWith(currentUrl)) {
+        // Automatically load the NBX into the entity viewer if it is already open.
+        window.open("nbx/nbx.html?currentUrl=" + currentUrl, "reusable_entity_tab");
+      }
+
+      showRecord(doc, url);
+
+      updateSelectablePersons(doc, $("#new-relationship-person-1"));
+      updateSelectablePersons(doc, $("#new-relationship-person-2"));
+      updateSelectablePersons(doc, $("#new-relationship-person-3"));
+      updateSelectablePersons(doc, $("#edit-relationship-person-1"));
+      updateSelectablePersons(doc, $("#edit-relationship-person-2"));
+      updateSelectablePersons(doc, $("#copy-person-fact-target-persons"));
+
+      // Rebuild the relationship graph. Set global variable (defined in RelChartBuilder.js).
+      relChart = buildGraph(doc, true, relChart, true);
+     }
+
+    /**
+     *  Update the selectable persons of a record.
+     *
+     *  @param doc The record.
+     *  @param select The selection.
+     */
+    function updateSelectablePersons(doc, select) {
+      select.empty();
+      $.each(doc.persons, function(i, person) {
+        select.append($("<option/>", {
+          value: person.id,
+          text: getBestNameValue(person)
+        }));
+      });
+    }
+
+    let nextSectionIndex = 1;
+
+    // Set the sectionId of each RecordInfo in recordInfos[] to the text section each record seems to have come from.
+    // If unclear, err on the side of leaving sections unassigned.
+    // function alignTextSectionsWithRecords() {
+    //   let sourceFileElement = $("#source-file");
+    //   let sectionTexts = [];
+    //   let sectionIndex = 0;
+    //   for (let sectionDiv = sourceFileElement.firstChild; sectionDiv; sectionDiv = sectionDiv.nextSibling) {
+    //     //todo: See if this recurses
+    //     sectionTexts[sectionIndex++] = sectionDiv.textContent;
+    //   }
+    //
+    //   let scores = [];
+    //   for (let recordIndex = 0; recordIndex < recordInfos.length; recordIndex++) {
+    //
+    //   }
+    // }
+
+    // Get HTML of the text sections.
+    function getTextSections() {
+      let sourceFileElement = $("#source-file")[0];
+      if (sourceFileElement) {
+        return sourceFileElement.innerHTML;
+      }
+      else {
+        return "";
+      }
+    }
+
+    // Tell whether the given GedcomX document has data, beyond its own SourceDescription.
+    function hasRecordData(doc) {
+      return doc && (Object.keys(doc).length > 2 || !isEmpty(doc.persons) || !isEmpty(doc.documents));
+    }
+
+    /**
+     * Show the source of a record. There is a "source-file" DIV in the HTML that contains one 'section' that corresponds to each record.
+     * Usually there is just one text section and one GedcomX record.
+     * But if a "¶" is included in the original text, or is typed at any time (or cmd/ctrl-Enter typed), then additional sections are added for each "¶".
+     * The "¶" is removed and not displayed. But if 'delete' is typed at the beginning of a section, then it is joined with the previous section.
+     * When gathering the text from all the sections, each section is assumed to be separated by a newline followed by a "¶" character.
+     * Each text section always corresponds to a RecordInfo object in the global recordInfos[] array, which in turn points back at this text section.
+     * @param text The text to show.
+     * @param name Name/title for the text.
+     */
+    function setRecordSourceDocument(text, name) {
+      sourceDocumentText = text;
+      sourceDocumentName = name;
+      let sourceFileElement = $("#source-file");
+
+      // Clear text sections and any pointers to them
+      sourceFileElement.empty();
+      if (recordInfos) {
+        for (let recordInfo of recordInfos) {
+          recordInfo.sectionId = null;
+        }
+      }
+
+      if (name) {
+        sourceFileElement.append($("<h1/>").append($("<small/>", {"class": "text-muted"}).text(name)));
+        let gxDownloadNode = $("#download-gx");
+        gxDownloadNode.attr("download", name.replace(/(.txt)?$/, ".gx.json"));
+      }
+
+      if (text) {
+        let sectionDiv = makeTextSection(null, text);
+        // Clear sectionId on all recordInfos, and remove any that have empty gedcomx objects.
+        recordInfos = recordInfos.filter(function(recordInfo) {
+          recordInfo.sectionId = null;
+          return hasRecordData(recordInfo.gxRecord);
+        });
+        if (recordInfos.length > 0) {
+          recordInfos[0].sectionId = sectionDiv.id;
+        }
+        else {
+          recordInfos = [new RecordInfo(sectionDiv.id)]
+        }
+        sourceFileElement.append(sectionDiv);
+        if (text.includes("¶")) {
+          splitText(sectionDiv);
+        }
+        selectTextSection(sectionDiv.id, true);
+        sectionDiv.focus();
+        //alignTextSectionsWithRecords();
+        $("#source-viewer").show();
+      }
+    }
+
+    // Find the index of the RecordInfo object in the global recordInfos[] that has the given sectionId
+    //   (or -1 if not found, which should be impossible).
+    function findRecordInfo(textSectionId) {
+      for (let index = 0; index < recordInfos.length; index++) {
+        if (recordInfos[index].sectionId === textSectionId) {
+          return index;
+        }
+      }
+      return -1; // not found
+    }
+
+    // Find the RecordInfo objects in the global recordInfos[] that refer to the two given textSectionIds.
+    // Merge the GedcomX data from the second RecordInfo into the GedcomX info of the first one.
+    // Delete the second RecordInfo object from recordInfos[] and slide the others down.
+    function mergeRecords(textSectionId1, textSectionId2) {
+      let recordInfo1Index = findRecordInfo(textSectionId1);
+      let recordInfo2Index = findRecordInfo(textSectionId2);
+      if (recordInfo1Index >= 0 && recordInfo2Index >= 0) {
+        mergeGedcomx(recordInfos[recordInfo1Index].gxRecord, recordInfos[recordInfo2Index].gxRecord);
+        recordInfos.splice(recordInfo2Index, 1);
+        currentRecordIndex = recordInfo1Index;
+      }
+    }
+
+    // Append the text from the second text section's div into the first one's div, and remove div2.
+    // Merge the GedcomX from div2's corresponding entry in recordInfos[] into div1's entry, and remove div2's entry.
+    function mergeSections(div1, div2) {
+      let firstChild2 = div2.firstChild;
+      while (div2.firstChild) {
+        div1.appendChild(div2.firstChild);
+      }
+      mergeRecords(div1.id, div2.id);
+      div2.remove();
+      selectTextSection(div1.id, true);
+      let range = document.createRange();
+      range.selectNodeContents(firstChild2);
+      range.collapse(true);
+      let selection = document.getSelection();
+      range.setStart(firstChild2, 0);
+      range.setEnd(firstChild2, 0);
+      range.collapse(true);
+      selection.removeAllRanges();
+      setTimeout(function () {
+        // Strangely, if this isn't in a timeout section, then Chrome replaces the <div> with a <span>,
+        // thus making the two sections be on the same line. Whatever.
+        selection.addRange(range);
+      }, 1);
+    }
+
+    function cursorIsAtBeginningOfSection(node) {
+      let selection = window.getSelection();
+      if (selection && selection.focusOffset === 0) {
+        let selectedNode = selection.focusNode;
+        if (selectedNode) {
+          for (let currentNode = node; currentNode; currentNode = currentNode.firstChild) {
+            if (currentNode === selectedNode) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    function enableTextSectionActions(element) {
+      element
+          .on("input", function (e) {
+            if (!e.originalEvent.data || e.originalEvent.data.includes("¶")) {
+              splitText(this, true);
+            }
+          })
+          .keydown(function (e) {
+            let event = e.originalEvent;
+            let isCmd = event.getModifierState("Meta") || event.getModifierState("Control");
+            if (event.code === "Enter" && isCmd) {
+              // Cmd/ctrl-Enter will split the current text section at the cursor.
+              insertParagraphMarkAtCursor();
+              splitText(this, true);
+            }
+            else if (event.code === "Backspace" && cursorIsAtBeginningOfSection(this)) {
+              // Hitting delete when at the beginning of a section will delete the "section break" and merge the sections together.
+              let prevSection = this.previousSibling;
+              if (prevSection) {
+                mergeSections(prevSection, this);
+              }
+            }
+          })
+          .on("focus", function () {
+            selectTextSection(this.id, false);
+          });
+    }
+
+    function makeTextSection(firstChildNode, orTextToUse) {
+      let sectionId = "text-section-" + nextSectionIndex++;
+      let element = $("<div contenteditable='true' class='edit-section' id='" + sectionId + "'/>");
+      if (firstChildNode) {
+        element.append(firstChildNode);
+      }
+      else {
+        let lines = orTextToUse.split("\n");
+        for (let line of lines) {
+          let lineDiv = document.createElement("div");
+          lineDiv.textContent = line;
+          element.append(lineDiv);
+        }
+      }
+      element.droppable({
+        hoverClass: "section-drop-hover",
+        scope: "personDropScope",
+        drop: personDropOnTextSection
+      });
+      enableTextSectionActions(element);
+      return element[0];
+    }
+
+    function findRecordInfoWithPersonId(personId) {
+      for (let i = 0; i < recordInfos.length; i++) {
+        let recordInfo = recordInfos[i];
+        if (recordInfo.gxRecord && recordInfo.gxRecord.persons) {
+          for (let person of recordInfo.gxRecord.persons) {
+            if (person.id === personId) {
+              return i;
+            }
+          }
+        }
+      }
+      throw Error("Could not find dropped person with id " + personId);
+    }
+
+    // Get the person ID from the person1 or person2 person reference in a relationship
+    function getRelativePersonId(relative) {
+      if (relative.resource.startsWith("#")) {
+        return relative.resource.substring(1);
+      }
+      return relative.resourceId;
+    }
+
+    // Gather a set of person IDs that are related (directly or indirectly) to the given personId in the given GedcomX record.
+    function getRelatedPersonIds(personId, gxRecord) {
+      // personIds to move: Includes the original personId, plus anyone connected via relationships (directly or indirectly)
+      let personIds = new Set();
+      personIds.add(personId);
+      let added = true;
+      while (added) {
+        added = false;
+        if (gxRecord.relationships) {
+          for (let relationship of gxRecord.relationships) {
+            let person1Id = getRelativePersonId(relationship.person1);
+            let person2Id = getRelativePersonId(relationship.person2);
+            if (personIds.has(person1Id) && !personIds.has(person2Id)) {
+              personIds.add(person2Id);
+              added = true;
+            }
+            else if (personIds.has(person2Id) && !personIds.has(person1Id)) {
+              personIds.add(person1Id);
+              added = true;
+            }
+          }
+        }
+      }
+      return personIds;
+    }
+
+    /**
+     * Move a person (and any connected relatives and relationships) from one record to the other.
+     * @param personId - personId to move
+     * @param sourceRecord - GedcomX record to move from
+     * @param targetRecord - GedcomX record to move to
+     */
+    function movePersonToOtherRecord(personId, sourceRecord, targetRecord) {
+      // personIds to move: Includes the original personId, plus anyone connected via relationships (directly or indirectly)
+      let personIdsToMove = getRelatedPersonIds(personId, sourceRecord);
+      if (!targetRecord.persons) {
+        targetRecord.persons = [];
+      }
+      for (let p = 0; p < sourceRecord.persons.length; p++) {
+        if (personIdsToMove.has(sourceRecord.persons[p].id)) {
+          targetRecord.persons.push(sourceRecord.persons[p]);
+          sourceRecord.persons.splice(p--, 1);
+        }
+      }
+      if (sourceRecord.relationships) {
+        for (let r = 0; r < sourceRecord.relationships.length; r++) {
+          let relationship = sourceRecord.relationships[r];
+          if (personIdsToMove.has(getRelativePersonId(relationship.person1)) || personIdsToMove.has(getRelativePersonId(relationship.person2))) {
+            if (!targetRecord.relationships) {
+              targetRecord.relationships = [relationship];
+            }
+            else {
+              targetRecord.relationships.push(relationship);
+            }
+            sourceRecord.relationships.splice(r--, 1);
+          }
+        }
+      }
+    }
+
+    /**
+     * Handle an event in which a person box was dropped on this text section.
+     * @param e - Event. Has the div id of the dropped control in e.originalEvent.target.id
+     * @param ui - UI object that has the div id of the dropped person if e doesn't have it.
+     */
+    function personDropOnTextSection(e, ui) {
+      let textSectionId = e.target.id; // or e.target.id?
+      let personBoxId = ui.draggable.attr("id");
+
+      // Remove initial chart#: 1-box_... => box_...
+      personBoxId = personBoxId.replace(/^[0-9]*-/,"");
+
+      if (personBoxId.startsWith("box_") && personBoxId.indexOf("Plus") < 0) {
+        // (local) personId of the dragged & dropped person
+        let personId = currentRelChart.personBoxMap[personBoxId].personNode.personId;
+        // GedcomX record corresponding to the text section that the person was dropped onto
+        let sourceRecordIndex = findRecordInfoWithPersonId(personId);
+        let targetRecordIndex = findRecordInfo(textSectionId);
+        if (sourceRecordIndex !== targetRecordIndex) {
+          movePersonToOtherRecord(personId, recordInfos[sourceRecordIndex].gxRecord, recordInfos[targetRecordIndex].gxRecord);
+          // Continue displaying the same original record, in case there are more persons from this record that need to be dragged over.
+          updateRecord(recordInfos[currentRecordIndex].gxRecord);
+        }
+      }
+    }
+
+    /**
+     * Select the given text section, while deselecting all the others.
+     * Select the corresponding RecordInfo object's GedcomX record for display and editing.
+     * @param textSectionId - id of div to select
+     * @param forceSelection -
+     */
+    function selectTextSection(textSectionId, forceSelection) {
+      let recordIndex = findRecordInfo(textSectionId);
+      if (recordIndex >= 0 && (forceSelection || recordIndex !== currentRecordIndex)) {
+        // Deselect the currently-selected section, if any
+        $(".selected-section").removeClass("selected-section");
+        let recordInfo = recordInfos[recordIndex];
+        // if (currentRecordIndex >= 0) {
+          // Store possibly-edited GedcomX
+          // recordInfos[currentRecordIndex].gxRecord = getCurrentGx();
+        // }
+        currentRecordIndex = recordIndex;
+        if (recordInfo.sectionId) {
+          let sectionDiv = $("#" + recordInfo.sectionId);
+          sectionDiv.addClass("selected-section");
+          sectionDiv.focus();
+        }
+        if (relChart) {
+          relChart = null; // avoid animation at beginning when switching to different records.
+        }
+        updateRecord(recordInfo.gxRecord, null, false, true);
+      }
+    }
+
+    // When the user types cmd/ctrl-Enter, then insert a paragraph mark at the current cursor location,
+    //   in preparation for the text being split just as though the paragraph mark had been typed.
+    function insertParagraphMarkAtCursor() {
+      let selection = window.getSelection();
+      if (selection) {
+        let selectedNode = selection.focusNode;
+        if (selectedNode) {
+          selectedNode.textContent = selectedNode.textContent.substring(0, selection.focusOffset) + "¶" + selectedNode.textContent.substring(selection.focusOffset);
+        }
+      }
+    }
+
+    /**
+     * Insert a new RecordInfo object after, and point the new RecordInfo object at sectionId2
+     */
+    function insertRecordInfo(sectionId1, sectionId2) {
+      let recordIndex1 = findRecordInfo(sectionId1);
+      let recordIndex2 = recordIndex1 + 1;
+      //todo: Check the following record to see if (a) it has no section Id yet; and (b) its names appear in the given text section.
+      // If so, then re-use the existing RecordInfo and point it at this sectionId. Otherwise, create a new RecordInfo with an empty record.
+      let newRecordInfo = new RecordInfo(sectionId2);
+      recordInfos.splice(recordIndex2, 0, newRecordInfo);
+    }
+
+    /**
+     * Given a DIV for one text section, which probably has at least one "¶" in it,
+     * split all of the text in this DIV past each ¶ into its own new section DIV.
+     * @param textSectionDiv - DOM node for a contenteditable text section.
+     * @param shouldSelectNewNode - Flag for whether to set the newly-created node as the currently-selected one, and put focus on it.
+     */
+    function splitText(textSectionDiv, shouldSelectNewNode) {
+      let newChildrenPairs = splitDomOnParagraphMark(textSectionDiv);
+      let lastNode = textSectionDiv;
+      for (let childNodePair of newChildrenPairs) {
+        let childNode = childNodePair[0];
+        let childSibling = childNodePair[1];
+        let newSectionDiv = makeTextSection(childNode, null);
+        insertRecordInfo(lastNode.id, newSectionDiv.id);
+        while (childSibling) {
+          let nextSibling = childSibling.nextSibling;
+          newSectionDiv.append(childSibling);
+          childSibling = nextSibling;
+        }
+        lastNode.insertAdjacentElement('afterend', newSectionDiv);
+        lastNode = newSectionDiv;
+      }
+      if (shouldSelectNewNode) {
+        selectTextSection(lastNode.id, true);
+      }
+    }
+
+    /**
+     * Check the children of the given DOM node (and its descendants) for ¶ marks.
+     * For each one found, create a new child node of the same type as the one it's found in,
+     * and add the new child to the returned array. The new child will not be a child of 'node',
+     * but, rather, the child of a new text section.
+     * So, for example, if we have
+     * <div id="1">Births: <b>Alex, Jan 2. ¶Bob, Jan 5. ¶Carol, Jan 6.</b> All doing well.</div>
+     * then the dom looks like
+     * div id=1
+     *   #text "Births: "
+     *   b
+     *     #text "Alex, Jan 2. ¶Bob, Jan 5. ¶Carol, Jan 6."
+     *   #text " All doing well."
+     * and we want it to end up as
+     * div id=1
+     *   #text "Births: "
+     *   b
+     *     #text "Alex, Jan 2. "
+     * div id=2
+     *   b
+     *     #text "Bob, Jan 5. "
+     * div id=3
+     *   b
+     *     #text "Carol, Jan 6."
+     *   #text " All doing well."
+     * Calling this on the div would
+     *   1) Ignore the first text line, as there is no ¶
+     *   2) Recursively call on the b
+     *      1) Find the first ¶, so
+     *         (a) truncate the b node's text to "Alex, Jan 2. "; and
+     *         (b) create a new #text node with "Bob, Jan 5. ¶Carol, Jan 6.", and add that to the array of new children
+     *      2) While looping, find the second ¶ in the newly-created #text node, so
+     *         (a) truncate the new #text to be "Bob, Jan 5. "
+     *         (b) create another new #text node with "Carol, Jan 6." and add that to the array of new children
+     *      3) return the array of two new children
+     *   3) Upon receiving two new children, the for each one,
+     *     (a) create a new <b> node with the child text, and add that to the list of new children.
+     *     (b) return that array of two new children
+     *   4) The caller will then create two new 'text section divs' and insert them after the original section div.
+     */
+    function splitDomOnParagraphMark(node) {
+      // Array of child nodes that need to each be the first child of a new section DIV.
+      let newChildren = [];
+      for (let childNode = node.firstChild; childNode; childNode = childNode.nextSibling) {
+        if (childNode.nodeName === '#text') {
+          let pos;
+          while ((pos = childNode.textContent.indexOf("¶")) >= 0) {
+            if (pos === 0) {
+              // Remove ¶ from beginning
+              childNode.textContent = childNode.textContent.substring(1);
+              // if (childNode !== node.firstChild) {
+                // If this is the first child of a section DIV, then the ¶ was redundant and no other structural change is needed.
+                // Otherwise, this node becomes the first child of a new div.
+                newChildren.push([childNode, null]);
+              // }
+            }
+            else {
+              // Split this node at the (first) ¶
+              let leftText = childNode.textContent.substring(0, pos);
+              let rightText = childNode.textContent.substring(pos + 1);
+              childNode.textContent = leftText;
+              let newNode = document.createTextNode(rightText);
+              newNode.textContent = rightText;
+              newChildren.push([newNode, null]);
+              // Cause 'newNode' to be checked for more ¶ in the while loop.
+              childNode = newNode;
+            }
+          }
+        }
+        else if (childNode.firstChild) {
+          // Not #text element, and has children, so try splitting those.
+          let subChildrenPairs = splitDomOnParagraphMark(childNode);
+          let lastNewElementPair = null;
+          for (let subChildPair of subChildrenPairs) {
+            // Split text down below, so create a new node of the same type as 'node' and add the subChild to it.
+            let subChild = subChildPair[0];
+            let subChildsNextSibling = subChildPair[1];
+            let newElement;
+            if (subChild === childNode.firstChild) {
+              // If we're splitting on the first child of a node, then steal the entire node.
+              newElement = childNode;
+            }
+            else {
+              newElement = document.createElement(childNode.nodeName);
+              newElement.appendChild(subChild);
+              while (subChildsNextSibling) {
+                let temp = subChildsNextSibling.nextSibling;
+                newElement.appendChild(subChildsNextSibling);
+                subChildsNextSibling = temp;
+              }
+            }
+            let newElementPair = [newElement, null];
+            newChildren.push(newElementPair);
+            lastNewElementPair = newElementPair;
+          }
+          if (lastNewElementPair && childNode.nextSibling) {
+            lastNewElementPair[1] = childNode.nextSibling;
+          }
+        }
+      }
+      return newChildren;
+    }
+
+    // Update the document text in the GedcomX, in response to edits happening in the text area.
+    function updateDocumentText(text) {
+      sourceDocumentText = text;
+      let doc = editor.get();
+      let sourceDocument = getSourceDocument(doc);
+      if (sourceDocument) {
+        sourceDocument.text = text;
+        editor.set(doc);
+      }
+    }
+
+    function loadSourceDocument(doc) {
+      if (doc.records && doc.records.length > 0) {
+        doc = doc.records[0];
+      }
+      let mainSourceDescription = getMainSourceDocumentSourceDescription(doc);
+      let sourceDocument = getSourceDocument(doc, mainSourceDescription);
+      if (sourceDocument) {
+        let title = mainSourceDescription.titles && mainSourceDescription.titles.length > 0 ? mainSourceDescription.titles[0].value : null;
+        setRecordSourceDocument(sourceDocument.text, title, sourceDocument);
+      }
+    }
+
+    /**
+     * Find a record node in the editor.
+     *
+     * @param path The path to the record node.
+     */
+    function findRecordNode(path) {
+      if (editorSelection) {
+        editorSelection.setSelected(false);
+      }
+
+      if (editor.getMode() === "code") {
+        editor.setMode("tree");
+      }
+
+      editor.collapseAll();
+      editorSelection = editor.node.findNode(path);
+      if (editorSelection) {
+        editorSelection.scrollTo();
+        editorSelection.expand(false);
+        editorSelection.setHighlight(true);
+      }
+      else {
+        showError("GX JSON path '" + path + "' does not exist.")
+      }
+    }
+
+    function getSectionText(sectionId) {
+      if (sectionId) {
+        let sectionDiv = $("#" + sectionId);
+        if (sectionDiv) {
+          let text = "";
+          for (let child of sectionDiv.children()) {
+            text += child.textContent;
+            if (child.nodeName === 'DIV' || child.nodeName === 'P' || child.nodeName === 'BR') {
+              text += "\n";
+            }
+          }
+          return text.trim();
+        }
+      }
+      return null;
+    }
+
+    function exportGedcomx() {
+      let records = [];
+      for (let recordInfo of recordInfos) {
+        let doc = recordInfo.gxRecord;
+        if (recordInfo.sectionId) {
+          let sectionText = getSectionText(recordInfo.sectionId); //$("#" + recordInfo.sectionId).text();
+          fixTextOfSourceOfSource(doc, sectionText, sourceDocumentName, recordInfo.sectionId);
+        }
+        records.push(doc);
+      }
+      let recordSet = { "records" : records };
+
+      return JSON.stringify(recordSet, (key, value) => value, 2);
+    }
+
+    function getPerson(doc, pid) {
+      let person;
+      if (doc.persons) {
+        for (let i = 0; i < doc.persons.length; i++) {
+          if (doc.persons[i].id === pid) {
+            person = doc.persons[i];
+            break;
+          }
+        }
+      }
+      return person;
+    }
+
+    function getRelationship(doc, rid) {
+      let relationship;
+      if (doc.relationships) {
+        for (let i = 0; i < doc.relationships.length; i++) {
+          if (doc.relationships[i].id === rid) {
+            relationship = doc.relationships[i];
+            break;
+          }
+        }
+      }
+      return relationship;
+    }
+
+    // Get the "main" source description for the given GedcomX document, i.e., the one pointed at by "description".
+    // If there isn't one, create it, give it an ID, set doc.description to point at it, and add it to the list of source descriptions.
+    function getOrAddMainSourceDescription(doc) {
+      let sd = getSourceDescription(doc);
+      if (!sd) {
+        sd = {
+          "resourceType" : "http://gedcomx.org/Record"
+        };
+        sd.id = generateLocalId("sd_");
+        doc.description = "#" + sd.id;
+        if (!doc.sourceDescriptions) {
+          doc.sourceDescriptions = [];
+        }
+        doc.sourceDescriptions.push(sd);
+      }
+      return sd;
+    }
+
+    function editRecordMetadata() {
+      let doc = editor.get();
+      let sd = getOrAddMainSourceDescription(doc);
+      let title = $("#edit-record-metadata-title").val();
+      if (title) {
+        if (!sd.titles || sd.titles.length === 0) {
+          sd.titles = [];
+          sd.titles.push({});
+        }
+        sd.titles[0].value = title;
+      }
+
+      if (!sd.coverage || sd.coverage.length === 0) {
+        sd.coverage = [];
+        sd.coverage.push({});
+      }
+
+      let type = $("#edit-record-metadata-type").val();
+      if (type) {
+        sd.coverage[0].recordType = "http://gedcomx.org/" + type;
+      }
+
+      let date = $("#edit-record-metadata-date").val();
+      if (date) {
+        if (!sd.coverage[0].temporal) {
+          sd.coverage[0].temporal = {};
+        }
+        sd.coverage[0].temporal.original = date;
+      }
+
+      let place = $("#edit-record-metadata-place").val();
+      if (place) {
+        if (!sd.coverage[0].spatial) {
+          sd.coverage[0].spatial = {};
+        }
+        sd.coverage[0].spatial.original = place;
+      }
+
+      let publisher = $("#edit-record-metadata-publisher").val();
+      if (publisher) {
+        let publisherAgent;
+        if (sd.publisher) {
+          publisherAgent = getAgent(doc, sd.publisher.resource);
+        }
+
+        if (!publisherAgent) {
+          publisherAgent = {};
+          publisherAgent.id = generateLocalId("a_");
+          sd.publisher = {};
+          sd.publisher.resourceId = publisherAgent.id;
+          sd.publisher.resource = "#" + publisherAgent.id;
+        }
+
+        if (!publisherAgent.names || publisherAgent.names.length === 0) {
+          publisherAgent.names = [];
+          publisherAgent.names.push({});
+        }
+
+        publisherAgent.names[0].value = publisher;
+        doc.agents = [];
+        doc.agents.push(publisherAgent);
+      }
+
+      updateRecord(doc);
+      $("#edit-record-metadata").modal("hide");
+    }
+
+    editHooks.copyRecordMetadata = function(gxRecord) {
+      function hasCoverage(sourceDescription) {
+        return sourceDescription && sourceDescription.coverage && sourceDescription.coverage.length > 0;
+      }
+
+      // Return the first coverage in the given record's main source description, if any, or else null.
+      function getCoverage(gxRecord) {
+        let sd = getSourceDescription(gxRecord);
+        return hasCoverage(sd) ? sd.coverage[0] : null;
+      }
+
+      function setCoverage(gxRecord, coverage) {
+        let sd = getOrAddMainSourceDescription(gxRecord);
+        sd.coverage = [coverage];
+      }
+
+      let coverage = getCoverage(gxRecord);
+
+      if (!coverage) {
+        for (let recordInfo of recordInfos) {
+          coverage = getCoverage(recordInfo.gxRecord);
+          if (coverage) {
+            break;
+          }
+        }
+      }
+      if (coverage) {
+        for (let recordInfo of recordInfos) {
+          setCoverage(recordInfo.gxRecord, coverage);
+        }
+      }
+    }
+
+    editHooks.editRecordMetadata =  function(metadata) {
+      if (metadata.Title) {
+        $("#edit-record-metadata-title").val(metadata.Title);
+      }
+      else {
+        $("#edit-record-metadata-title").val("");
+      }
+
+      if (metadata.Type) {
+        $("#edit-record-metadata-type").val(metadata.Type);
+      }
+      else {
+        $("#edit-record-metadata-type").val("");
+      }
+
+      if (metadata.Date) {
+        $("#edit-record-metadata-date").val(metadata.Date);
+      }
+      else {
+        $("#edit-record-metadata-date").val("");
+      }
+
+      if (metadata.Place) {
+        $("#edit-record-metadata-place").val(metadata.Place);
+      }
+      else {
+        $("#edit-record-metadata-place").val("");
+      }
+
+      if (metadata.Publisher) {
+        $("#edit-record-metadata-publisher").val(metadata.Publisher);
+      }
+      else {
+        $("#edit-record-metadata-publisher").val("");
+      }
+
+      $("#edit-record-metadata").modal("show");
+    };
+
+    function addPerson() {
+      let person = {};
+      person.id = "p_999" + Math.floor(Math.random() * Math.floor(1000000000));
+      person.extracted = true;
+      person.principal = $("#new-person-principal").is(":checked");
+      person.gender = {};
+      person.gender.type = $("input[name=new-person-gender]:checked").val();
+      person.names = [];
+      person.facts = [];
+      person.fields = [];
+
+      let name = {};
+      name.id = generateLocalId("n_");
+      name.type = null;
+      name.nameForms = [];
+
+      let nameForm = {};
+      let prefixes = $("#new-person-prefixes").val();
+      let givenNames = $("#new-person-given-names").val();
+      let surnames = $("#new-person-surnames").val();
+      let suffixes = $("#new-person-suffixes").val();
+
+      nameForm.fullText = [prefixes, givenNames, surnames, suffixes].filter(Boolean).join(" ");
+      nameForm.parts = [];
+
+      addPart(prefixes, "Prefix");
+      addPart(givenNames, "Given");
+      addPart(surnames, "Surname");
+      addPart(suffixes, "Suffix");
+
+      function addPart(value, type) {
+        if (value) {
+          let part = {};
+          part.type = "http://gedcomx.org/" + type;
+          part.value = value;
+          nameForm.parts.push(part);
+        }
+      }
+
+      name.nameForms.push(nameForm);
+      person.names.push(name);
+
+      let doc = editor.get();
+      if (!doc.persons) {
+        doc.persons = [];
+      }
+      doc.persons.push(person);
+      updateRecord(doc);
+      $("#new-person").modal("hide");
+      $("#new-person-form").children().find("input[type=text]").each(function() {
+        $(this).val("");
+      });
+    }
+
+    editHooks.addPerson = function() {
+      if (window.getSelection()) {
+        updatePersonNameFromHighlight();
+        window.getSelection().removeAllRanges();
+      }
+      $("#new-person").modal("show");
+    };
+
+    /*
+      UpdatePersonNameFromHighlight
+      Gets the text area of 'source-document' and checks for highlighted text. Then parses into 'new-person' modal
+     */
+
+    editHooks.updatePersonNameFromHighlight = function() {
+      alert("hello");
+      if (window.getSelection()) {
+        updatePersonNameFromHighlight(); // Reads the text from article and updates fields
+        window.getSelection().removeAllRanges();
+      }
+    };
+
+    function updatePersonNameFromHighlight() {
+      let selection = window.getSelection();
+      if (selection) {
+        let selectedText = selection.toString();
+
+        let hasCommaAfterFirstPart = !!selectedText.match(/[A-Za-z]*,.*/);
+        let splitTxt = selectedText.replace(/[,;()]/g, " ").replace(/  */g, " ").trim().split(" ");
+
+        let prefixField = $("#new-person-prefixes");
+        let givenField = $("#new-person-given-names");
+        let surnameField = $("#new-person-surnames");
+        let suffixField = $("#new-person-suffixes");
+
+        // Clear all four fields so we don't get anything dangling from last time.
+        prefixField.val("");
+        givenField.val("");
+        surnameField.val("");
+        suffixField.val("");
+
+        if (splitTxt.length > 0 && isPrefix(splitTxt[0])) {
+          prefixField.val(splitTxt.shift());
+        }
+        if (splitTxt.length > 0 && isSuffix(splitTxt[splitTxt.length - 1])) {
+          suffixField.val(splitTxt.pop());
+        }
+        if (splitTxt.length >= 2) {
+          surnameField.val(hasCommaAfterFirstPart ? splitTxt.shift() : splitTxt.pop());
+        }
+        if (splitTxt.length > 0) {
+          givenField.val(splitTxt.join(" "));
+        }
+        // }
+      }
+    }
+
+    function isPrefix(prefix) {
+      return prefix.toLowerCase().match("(mr|mrs|miss|rev|fr|dr|dra|infant|baby)\\.?$");
+    }
+
+    function isSuffix(suffix) {
+      return suffix.toLowerCase().match("(jr|sr|iv|ii+|vii+|xi|senr|senior|junior|junr)\\.?$");
+    }
+
+    editHooks.removePerson = function (pid) {
+      let doc = editor.get();
+      let pidref = "#" + pid;
+      let relationships = [];
+      if (doc.relationships) {
+        for (let i = 0; i < doc.relationships.length; i++) {
+          let relationship = doc.relationships[i];
+          if (!((relationship.person1 && relationship.person1.resource === pidref) || (relationship.person2 && relationship.person2.resource === pidref))) {
+            relationships.push(relationship);
+          }
+        }
+      }
+      doc.relationships = relationships;
+
+      if (doc.persons) {
+        for (let i = 0; i < doc.persons.length; i++) {
+          let person = doc.persons[i];
+          if (person.id === pid) {
+            doc.persons.splice(i, 1);
+            updateRecord(doc);
+            return;
+          }
+        }
+      }
+
+      showError("Unable to delete person: invalid person id: " + pid);
+    };
+
+    function addRelationship() {
+      let doc = editor.get();
+      if (!doc.relationships) {
+        doc.relationships = [];
+      }
+
+      let pids1 = $("#new-relationship-person-1").val();
+      pids1 = pids1 || [];
+      let pids2 = $("#new-relationship-person-2").val();
+      pids2 = pids2 || [];
+      for (let i = 0; i < pids1.length; i++) {
+        let pid1 = pids1[i];
+        for (let j = 0; j < pids2.length; j++) {
+          let pid2 = pids2[j];
+          let relationship = {};
+          relationship.id = generateLocalId("r_");
+          relationship.type = $("#new-relationship-type").val();
+          relationship.person1 = {};
+          relationship.person1.resourceId = pid1;
+          relationship.person1.resource = "#" + pid1;
+          relationship.person2 = {};
+          relationship.person2.resourceId = pid2;
+          relationship.person2.resource = "#" + pid2;
+          doc.relationships.push(relationship);
+        }
+      }
+
+
+      updateRecord(doc);
+      $("#new-relationship").modal("hide");
+    }
+
+    function editRelationship() {
+      let rid = $("#edit-relationship-id").val();
+      let doc = editor.get();
+      let relationship = getRelationship(doc, rid);
+      if (!relationship) {
+        showError("Cannot edit relationship: invalid relationship id: " + pid);
+        return;
+      }
+
+      relationship.type = $("#edit-relationship-type").val();
+      relationship.person1 = {};
+      relationship.person1.resourceId = $("#edit-relationship-person-1").val();
+      relationship.person1.resource = "#" + relationship.person1.resourceId;
+      relationship.person2 = {};
+      relationship.person2.resourceId = $("#edit-relationship-person-2").val();
+      relationship.person2.resource = "#" + relationship.person2.resourceId;
+
+      updateRecord(doc);
+      $("#edit-relationship").modal("hide");
+    }
+
+    editHooks.addRelationship = function(pid) {
+      if (pid) {
+        $("#new-relationship-person-1").val(pid);
+        $("#new-relationship-person-2").val(pid);
+      }
+
+      $("#new-relationship").modal("show");
+    };
+
+    editHooks.editRelationship = function(relationship) {
+      $("#edit-relationship-id").val(relationship.id);
+
+      if (relationship.type) {
+        $("#edit-relationship-type").val(relationship.type);
+      }
+
+      if (relationship.person1 && relationship.person1.resource) {
+        $("#edit-relationship-person-1").val(relationship.person1.resource.substr(1));
+      }
+
+      if (relationship.person2 && relationship.person2.resource) {
+        $("#edit-relationship-person-2").val(relationship.person2.resource.substr(1));
+      }
+
+      $("#edit-relationship").modal("show");
+    };
+
+    editHooks.removeRelationship = function (rid) {
+      let doc = editor.get();
+      if (doc.relationships) {
+        for (let i = 0; i < doc.relationships.length; i++) {
+          let relationship = doc.relationships[i];
+          if (relationship.id === rid) {
+            doc.relationships.splice(i, 1);
+            updateRecord(doc);
+            return;
+          }
+        }
+      }
+
+      showError("Unable to delete relationship: invalid relationship id: " + rid);
+    };
+
+    editHooks.editPrincipal = function(pid) {
+      let doc = editor.get();
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot edit principal: invalid person id: " + pid);
+        return;
+      }
+
+      person.principal = !person.principal;
+      updateRecord(doc);
+    };
+
+    editHooks.editGender = function(pid) {
+      let doc = editor.get();
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot edit gender: invalid person id: " + pid);
+        return;
+      }
+
+      if (!person.gender) {
+        person.gender = {};
+      }
+
+      let type;
+      switch (person.gender.type) {
+        case "http://gedcomx.org/Male":
+          type = "http://gedcomx.org/Female";
+          break;
+        case "http://gedcomx.org/Female":
+          type = "http://gedcomx.org/Unknown";
+          break;
+        default:
+          type = "http://gedcomx.org/Male";
+          break;
+      }
+
+      person.gender.type = type;
+      updateRecord(doc);
+    };
+
+    function addPersonName() {
+      let doc = editor.get();
+
+      let pid = $("#new-person-name-person-id").val();
+      if (!pid) {
+        showError("Cannot add name: no person id provided in the form.");
+        return;
+      }
+
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot add name: invalid person id: " + pid);
+        return;
+      }
+
+      if (!person.names) {
+        person.names = [];
+      }
+
+      let name = {};
+      name.id = generateLocalId("n_");
+      let nameType = $("#new-person-name-type").val();
+      if (nameType) {
+        name.type = nameType;
+      }
+      name.nameForms = [];
+      let nameForm = {};
+      nameForm.parts = [];
+      let namePart;
+      let fullText;
+
+      let prefix = $("#new-person-name-prefix").val();
+      if (prefix) {
+        fullText = prefix;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Prefix";
+        namePart.value = prefix;
+        nameForm.parts.push(namePart);
+      }
+
+      let given = $("#new-person-name-given-names").val();
+      if (given) {
+        fullText = fullText ? fullText + " " + given : given;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Given";
+        namePart.value = given;
+        nameForm.parts.push(namePart);
+      }
+
+      let surname = $("#new-person-name-surnames").val();
+      if (surname) {
+        fullText = fullText ? fullText + " " + surname : surname;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Surname";
+        namePart.value = surname;
+        nameForm.parts.push(namePart);
+      }
+
+      let suffix = $("#new-person-name-suffix").val();
+      if (suffix) {
+        fullText = fullText ? fullText + " " + suffix : suffix;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Suffix";
+        namePart.value = suffix;
+        nameForm.parts.push(namePart);
+      }
+
+      if (fullText) {
+        nameForm.fullText = fullText;
+      }
+
+      name.nameForms.push(nameForm);
+      person.names.push(name);
+      updateRecord(doc);
+      $("#new-name").modal("hide");
+    }
+
+    function editPersonName() {
+      let doc = editor.get();
+
+      let pid = $("#edit-person-name-person-id").val();
+      if (!pid) {
+        showError("Cannot edit name: no person id provided in the form.");
+        return;
+      }
+
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot edit name: invalid person id: " + pid);
+        return;
+      }
+
+      let nid = $("#edit-person-name-name-id").val();
+      if (!nid) {
+        showError("Cannot edit name: no name id provided in the form.");
+        return;
+      }
+
+      let name;
+      if (person.names) {
+        for (let i = 0; i < person.names.length; i++) {
+          if (person.names[i].id === nid) {
+            name = person.names[i];
+            break;
+          }
+        }
+      }
+      if (!name) {
+        showError("Cannot edit name: invalid name id: " + nid);
+        return;
+      }
+
+      let nameType = $("#edit-person-name-type").val();
+      if (nameType) {
+        name.type = nameType;
+      }
+      else {
+        name.type = null;
+      }
+
+      name.nameForms = [];
+      let nameForm = {};
+      nameForm.parts = [];
+      let namePart;
+      let fullText;
+
+      let prefix = $("#edit-person-name-prefix").val();
+      if (prefix) {
+        fullText = prefix;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Prefix";
+        namePart.value = prefix;
+        nameForm.parts.push(namePart);
+      }
+
+      let given = $("#edit-person-name-given-names").val();
+      if (given) {
+        fullText = fullText ? fullText + " " + given : given;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Given";
+        namePart.value = given;
+        nameForm.parts.push(namePart);
+      }
+
+      let surname = $("#edit-person-name-surnames").val();
+      if (surname) {
+        fullText = fullText ? fullText + " " + surname : surname;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Surname";
+        namePart.value = surname;
+        nameForm.parts.push(namePart);
+      }
+
+      let suffix = $("#edit-person-name-suffix").val();
+      if (suffix) {
+        fullText = fullText ? fullText + " " + suffix : suffix;
+        namePart = {};
+        namePart.type = "http://gedcomx.org/Suffix";
+        namePart.value = suffix;
+        nameForm.parts.push(namePart);
+      }
+
+      if (fullText) {
+        nameForm.fullText = fullText;
+      }
+
+      name.nameForms.push(nameForm);
+      updateRecord(doc);
+      $("#edit-name").modal("hide");
+    }
+
+    editHooks.addName =  function(pid) {
+      $("#new-person-name-person-id").val(pid);
+      $("#new-name").modal("show");
+    };
+
+    editHooks.editName = function(pid, name) {
+      $("#edit-person-name-person-id").val(pid);
+
+      if (name.id) {
+        $("#edit-person-name-name-id").val(name.id);
+      }
+      else {
+        showError("Invalid name to edit: no id.");
+      }
+
+      if (name.type) {
+        $("#edit-person-name-type").val(name.type);
+      }
+      else {
+        $("#edit-person-name-type").val("");
+      }
+
+      let prefixInput = $("#edit-person-name-prefix").val("");
+      let givenInput = $("#edit-person-name-given-names").val("");
+      let surnameInput = $("#edit-person-name-surnames").val("");
+      let suffixInput = $("#edit-person-name-suffix").val("");
+      if (name.nameForms && name.nameForms.length > 0) {
+        let nameForm = name.nameForms[0];
+        if (nameForm.parts) {
+          for (let i = 0; i < nameForm.parts.length; i++) {
+            let part = nameForm.parts[i];
+            switch (part.type) {
+              case "http://gedcomx.org/Prefix":
+                prefixInput.val(part.value);
+                break;
+              case "http://gedcomx.org/Given":
+                givenInput.val(part.value);
+                break;
+              case "http://gedcomx.org/Surname":
+                surnameInput.val(part.value);
+                break;
+              case "http://gedcomx.org/Suffix":
+                suffixInput.val(part.value);
+                break;
+            }
+          }
+        }
+      }
+
+      $("#edit-name").modal("show");
+    };
+
+    editHooks.removeName = function(pid, nid) {
+      if (!nid) {
+        showError("Cannot remove name: no name id provided.");
+        return;
+      }
+
+      let doc = editor.get();
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot remove name: invalid person id: " + pid);
+        return;
+      }
+
+      if (person.names) {
+        for (let i = 0; i < person.names.length; i++) {
+          let name = person.names[i];
+          if (name.id === nid) {
+            person.names.splice(i, 1);
+            updateRecord(doc);
+            return;
+          }
+        }
+      }
+
+      showError("Cannot remove name from person " + pid + ": invalid name id: " + nid);
+    };
+
+    function addPersonFact() {
+      let doc = editor.get();
+
+      let pid = $("#new-person-fact-person-id").val();
+      if (!pid) {
+        showError("Cannot add fact: no person id provided in the form.");
+        return;
+      }
+
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot add fact: invalid person id: " + pid);
+        return;
+      }
+
+      if (!person.facts) {
+        person.facts = [];
+      }
+
+      let fact = {};
+      fact.id = generateLocalId("f_");
+      fact.type = $("#new-person-fact-type").val();
+      fact.primary = $("#new-person-fact-primary").is(":checked");
+
+      let date = $("#new-person-fact-date").val();
+      if (date) {
+        fact.date = {};
+        fact.date.original = date;
+      }
+
+      let place = $("#new-person-fact-place").val();
+      if (place) {
+        fact.place = {};
+        fact.place.original = place;
+      }
+
+      let value = $("#new-person-fact-value").val();
+      if (value) {
+        fact.value = value;
+      }
+
+      let age = $("#new-person-fact-age").val();
+      if (age) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Age", value: age});
+      }
+
+      let cause = $("#new-person-fact-cause").val();
+      if (cause) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Cause", value: cause});
+      }
+
+      person.facts.push(fact);
+      updateRecord(doc);
+      $("#new-person-fact").modal("hide");
+    }
+
+
+    function addPersonFactMultiple() {
+      let doc = editor.get();
+      let pid = document.getElementById('new-relationship-person-3');
+
+      if (!pid) {
+        showError("Cannot add fact: no person id provided in the form.");
+        return;
+      }
+
+      for (let i = 0; i < pid.options.length; i++) {
+        let pids = pid.options[i];
+        if (pids.selected){
+          pids = pids.value;
+          let person = getPerson(doc, pids);
+          if (!person) {
+            showError("Cannot add fact: invalid person id: " + pid);
+            return;
+          }
+
+          let fact = {};
+          fact.id = generateLocalId("f_");
+          fact.type = $("#new-person-fact-multiple-type").val();
+          fact.primary = $("#new-person-fact-primary2").is(":checked");
+
+          let date = $("#new-person-fact-date2").val();
+          if (date) {
+            fact.date = {};
+            fact.date.original = date;
+          }
+
+          let place = $("#new-person-fact-place2").val();
+          if (place) {
+            fact.place = {};
+            fact.place.original = place;
+          }
+
+          let value = $("#new-person-fact-value2").val();
+          if (value) {
+            fact.value = value;
+          }
+
+          let age = $("#new-person-fact-age2").val();
+          if (age) {
+            fact.qualifiers = fact.qualifiers || [];
+            fact.qualifiers.push({name: "http://gedcomx.org/Age", value: age});
+          }
+
+          let cause = $("#new-person-fact-cause2").val();
+          if (cause) {
+            fact.qualifiers = fact.qualifiers || [];
+            fact.qualifiers.push({name: "http://gedcomx.org/Cause", value: cause});
+          }
+
+          person.facts.push(fact);
+        }
+      }
+      updateRecord(doc);
+      $("#add-new-fact-multiple").modal("hide");
+    }
+
+    function editPersonFact() {
+      let doc = editor.get();
+
+      let pid = $("#edit-person-fact-person-id").val();
+      if (!pid) {
+        showError("Cannot edit fact: no person id provided in the form.");
+        return;
+      }
+
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot edit fact: invalid person id: " + pid);
+        return;
+      }
+
+      let fid = $("#edit-person-fact-fact-id").val();
+      if (!fid) {
+        showError("Cannot edit fact: no fact id provided in the form.");
+        return;
+      }
+
+      let fact;
+      if (person.facts) {
+        for (let i = 0; i < person.facts.length; i++) {
+          if (person.facts[i].id === fid) {
+            fact = person.facts[i];
+            break;
+          }
+        }
+      }
+
+      if (!fact) {
+        showError("Cannot edit fact: invalid fact id: " + fid);
+        return;
+      }
+
+      fact.type = $("#edit-person-fact-type").val();
+      fact.primary = $("#edit-person-fact-primary").is(":checked");
+
+      let date = $("#edit-person-fact-date").val();
+      if (date) {
+        fact.date = {};
+        fact.date.original = date;
+      }
+      else {
+        fact.date = null;
+      }
+
+      let place = $("#edit-person-fact-place").val();
+      if (place) {
+        fact.place = {};
+        fact.place.original = place;
+      }
+      else {
+        fact.place = null;
+      }
+
+      let value = $("#edit-person-fact-value").val();
+      if (value) {
+        fact.value = value;
+      }
+      else {
+        fact.value = null;
+      }
+
+      fact.qualifiers = null;
+      let age = $("#edit-person-fact-age").val();
+      if (age) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Age", value: age});
+      }
+
+      let cause = $("#edit-person-fact-cause").val();
+      if (cause) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Cause", value: cause});
+      }
+
+      updateRecord(doc);
+      $("#edit-person-fact").modal("hide");
+    }
+
+    function copyPersonFact() {
+      let doc = editor.get();
+
+      let pid = $("#copy-person-fact-person-id").val();
+      if (!pid) {
+        showError("Cannot copy fact: no person id provided in the form.");
+        return;
+      }
+
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot copy fact: invalid person id: " + pid);
+        return;
+      }
+
+      let fid = $("#copy-person-fact-fact-id").val();
+      if (!fid) {
+        showError("Cannot copy fact: no fact id provided in the form.");
+        return;
+      }
+
+      let fact;
+      if (person.facts) {
+        for (let i = 0; i < person.facts.length; i++) {
+          if (person.facts[i].id === fid) {
+            fact = person.facts[i];
+            break;
+          }
+        }
+      }
+
+      if (!fact) {
+        showError("Cannot copy fact: invalid fact id: " + fid);
+        return;
+      }
+
+      let targetIds = $("#copy-person-fact-target-persons").val();
+      for (let i = 0; i < targetIds.length; i++) {
+        let targetPerson = getPerson(doc, targetIds[i]);
+        if (!targetPerson) {
+          showError("Cannot copy fact: invalid person id selected: " + targetIds[i]);
+          return;
+        }
+
+        targetPerson.facts = targetPerson.facts || [];
+        let clonedFact = $.extend(true, {}, fact);
+        clonedFact.id = generateLocalId("f_");
+        targetPerson.facts.push(clonedFact);
+      }
+
+      updateRecord(doc);
+      $("#copy-person-fact").modal("hide");
+    }
+
+    editHooks.addPersonFact =  function(pid) {
+      $("#new-person-fact-person-id").val(pid);
+      $("#new-person-fact").modal("show");
+    };
+
+    editHooks.removePersonFact = function(pid, fid) {
+      if (!fid) {
+        showError("Cannot remove fact: no fact id provided.");
+        return;
+      }
+
+      let doc = editor.get();
+      let person = getPerson(doc, pid);
+      if (!person) {
+        showError("Cannot remove fact: invalid person id: " + pid);
+        return;
+      }
+
+      if (person.facts) {
+        for (let i = 0; i < person.facts.length; i++) {
+          let fact = person.facts[i];
+          if (fact.id === fid) {
+            person.facts.splice(i, 1);
+            updateRecord(doc);
+            return;
+          }
+        }
+      }
+
+      showError("Cannot remove fact from person " + pid + ": invalid fact id: " + fid);
+    };
+
+    editHooks.editPersonFact =  function(pid, fact) {
+      $("#edit-person-fact-person-id").val(pid);
+
+      if (fact.id) {
+        $("#edit-person-fact-fact-id").val(fact.id);
+      }
+      else {
+        showError("Cannot edit fact: no id.");
+        return;
+      }
+
+      if (fact.type) {
+        $("#edit-person-fact-type").val(fact.type);
+      }
+
+      if (fact.primary) {
+        $("#edit-person-fact-primary").prop("checked", true);
+      }
+
+      if (fact.date && fact.date.original) {
+        $("#edit-person-fact-date").val(fact.date.original);
+      }
+      else {
+        $("#edit-person-fact-date").val("");
+      }
+
+      if (fact.place && fact.place.original) {
+        $("#edit-person-fact-place").val(fact.place.original);
+      }
+      else {
+        $("#edit-person-fact-place").val("");
+      }
+
+      if (fact.value) {
+        $("#edit-person-fact-value").val(fact.value);
+      }
+      else {
+        $("#edit-person-fact-value").val("");
+      }
+
+      let age;
+      let cause;
+      if (fact.qualifiers) {
+        for (let i = 0; i < fact.qualifiers.length; i++) {
+          let qualifier = fact.qualifiers[i];
+          switch (qualifier.name) {
+            case "http://gedcomx.org/Age":
+              age = qualifier.value;
+              break;
+            case "http://gedcomx.org/Cause":
+              cause = qualifier.value;
+              break;
+          }
+        }
+      }
+
+      if (age) {
+        $("#edit-person-fact-age").val(age);
+      }
+      else {
+        $("#edit-person-fact-age").val("");
+      }
+
+      if (cause) {
+        $("#edit-person-fact-cause").val(cause);
+      }
+      else {
+        $("#edit-person-fact-cause").val("");
+      }
+
+      $("#edit-person-fact").modal("show");
+    };
+
+    editHooks.copyPersonFact = function(pid, fid) {
+      $("#copy-person-fact-person-id").val(pid);
+      $("#copy-person-fact-fact-id").val(fid);
+      $("#copy-person-fact").modal("show");
+    };
+
+    function addRelationshipFact() {
+      let doc = editor.get();
+
+      let pid = $("#new-relationship-fact-relationship-id").val();
+      if (!pid) {
+        showError("Cannot add fact: no relationship id provided in the form.");
+        return;
+      }
+
+      let relationship = getRelationship(doc, pid);
+      if (!relationship) {
+        showError("Cannot add fact: invalid relationship id: " + pid);
+        return;
+      }
+
+      if (!relationship.facts) {
+        relationship.facts = [];
+      }
+
+      let fact = {};
+      fact.id = generateLocalId("f_");
+      fact.type = $("#new-relationship-fact-type").val();
+      fact.primary = $("#new-relationship-fact-primary").is(":checked");
+
+      let date = $("#new-relationship-fact-date").val();
+      if (date) {
+        fact.date = {};
+        fact.date.original = date;
+      }
+
+      let place = $("#new-relationship-fact-place").val();
+      if (place) {
+        fact.place = {};
+        fact.place.original = place;
+      }
+
+      let value = $("#new-relationship-fact-value").val();
+      if (value) {
+        fact.value = value;
+      }
+
+      let age = $("#new-relationship-fact-age").val();
+      if (age) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Age", value: age});
+      }
+
+      let cause = $("#new-relationship-fact-cause").val();
+      if (cause) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Cause", value: cause});
+      }
+
+      relationship.facts.push(fact);
+      updateRecord(doc);
+      $("#new-relationship-fact").modal("hide");
+    }
+
+    function editRelationshipFact() {
+      let doc = editor.get();
+
+      let pid = $("#edit-relationship-fact-relationship-id").val();
+      if (!pid) {
+        showError("Cannot edit fact: no relationship id provided in the form.");
+        return;
+      }
+
+      let relationship = getRelationship(doc, pid);
+      if (!relationship) {
+        showError("Cannot edit fact: invalid relationship id: " + pid);
+        return;
+      }
+
+      let fid = $("#edit-relationship-fact-fact-id").val();
+      if (!fid) {
+        showError("Cannot edit fact: no fact id provided in the form.");
+        return;
+      }
+
+      let fact;
+      if (relationship.facts) {
+        for (let i = 0; i < relationship.facts.length; i++) {
+          if (relationship.facts[i].id === fid) {
+            fact = relationship.facts[i];
+            break;
+          }
+        }
+      }
+
+      if (!fact) {
+        showError("Cannot edit fact: invalid fact id: " + fid);
+        return;
+      }
+
+      fact.type = $("#edit-relationship-fact-type").val();
+      fact.primary = $("#edit-relationship-fact-primary").is(":checked");
+
+      let date = $("#edit-relationship-fact-date").val();
+      if (date) {
+        fact.date = {};
+        fact.date.original = date;
+      }
+      else {
+        fact.date = null;
+      }
+
+      let place = $("#edit-relationship-fact-place").val();
+      if (place) {
+        fact.place = {};
+        fact.place.original = place;
+      }
+      else {
+        fact.place = null;
+      }
+
+      let value = $("#edit-relationship-fact-value").val();
+      if (value) {
+        fact.value = value;
+      }
+      else {
+        fact.value = null;
+      }
+
+      fact.qualifiers = null;
+      let age = $("#edit-relationship-fact-age").val();
+      if (age) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Age", value: age});
+      }
+
+      let cause = $("#edit-relationship-fact-cause").val();
+      if (cause) {
+        fact.qualifiers = fact.qualifiers || [];
+        fact.qualifiers.push({name: "http://gedcomx.org/Cause", value: cause});
+      }
+
+      updateRecord(doc);
+      $("#edit-relationship-fact").modal("hide");
+    }
+
+    editHooks.addRelationshipFact =  function(rid) {
+      $("#new-relationship-fact-relationship-id").val(rid);
+      $("#new-relationship-fact").modal("show");
+    };
+
+    editHooks.removeRelationshipFact = function(rid, fid) {
+      if (!fid) {
+        showError("Cannot remove fact: no fact id provided.");
+        return;
+      }
+
+      let doc = editor.get();
+      let relationship = getRelationship(doc, rid);
+      if (!relationship) {
+        showError("Cannot remove fact: invalid relationship id: " + rid);
+        return;
+      }
+
+      if (relationship.facts) {
+        for (let i = 0; i < relationship.facts.length; i++) {
+          let fact = relationship.facts[i];
+          if (fact.id === fid) {
+            relationship.facts.splice(i, 1);
+            updateRecord(doc);
+            return;
+          }
+        }
+      }
+
+      showError("Cannot remove fact from relationship " + rid + ": invalid fact id: " + fid);
+    };
+
+    editHooks.editRelationshipFact =  function(pid, fact) {
+      $("#edit-relationship-fact-relationship-id").val(pid);
+
+      if (fact.id) {
+        $("#edit-relationship-fact-fact-id").val(fact.id);
+      }
+      else {
+        showError("Cannot edit fact: no id.");
+        return;
+      }
+
+      if (fact.type) {
+        $("#edit-relationship-fact-type").val(fact.type);
+      }
+
+      if (fact.primary) {
+        $("#edit-relationship-fact-primary").prop("checked", true);
+      }
+
+      if (fact.date && fact.date.original) {
+        $("#edit-relationship-fact-date").val(fact.date.original);
+      }
+      else {
+        $("#edit-relationship-fact-date").val("");
+      }
+
+      if (fact.place && fact.place.original) {
+        $("#edit-relationship-fact-place").val(fact.place.original);
+      }
+      else {
+        $("#edit-relationship-fact-place").val("");
+      }
+
+      if (fact.value) {
+        $("#edit-relationship-fact-value").val(fact.value);
+      }
+      else {
+        $("#edit-relationship-fact-value").val("");
+      }
+
+      let age;
+      let cause;
+      if (fact.qualifiers) {
+        for (let qualifier of fact.qualifiers) {
+          switch (qualifier.name) {
+            case "http://gedcomx.org/Age":
+              age = qualifier.value;
+              break;
+            case "http://gedcomx.org/Cause":
+              cause = qualifier.value;
+              break;
+          }
+        }
+      }
+
+      if (age) {
+        $("#edit-relationship-fact-age").val(age);
+      }
+      else {
+        $("#edit-relationship-fact-age").val("");
+      }
+
+      if (cause) {
+        $("#edit-relationship-fact-cause").val(cause);
+      }
+      else {
+        $("#edit-relationship-fact-cause").val("");
+      }
+
+      $("#edit-relationship-fact").modal("show");
+    };
+
+    function showError(text) {
+      $("#alert-container").empty().append(text);
+      $("#alert").modal("show");
+    }
+
+    function recoverRecord(useLocalStorage) {
+      let backupStr = useLocalStorage ? localStorage.getItem("Gx-Backup.localStorage") : sessionStorage.getItem("Gx-Backup");
+      if (backupStr) {
+        recoverRecordSetFromBackupString(backupStr);
+      }
+    }
+
+    function recoverRecordSetFromBackupString(backupStr) {
+      let backup = JSON.parse(backupStr);
+      if (backup.recordInfos && backup.recordInfos.length > 0) {
+        recordInfos = backup.recordInfos;
+        currentRecordIndex = backup.currentRecordIndex;
+      }
+      if (backup.textSections) {
+        let sourceFileElement = $("#source-file");
+        sourceFileElement.html(backup.textSections);
+        sourceFileElement.children('div').each(function() {
+          if (this.contentEditable === "true") {
+            enableTextSectionActions($(this));
+          }
+        });
+      }
+      else if (backup.text) {
+        setRecordSourceDocument(backup.text, backup.filename);
+      }
+      updateRecord(backup.doc, backup.url, false, true, true);
+      $("#download-gx").attr("download", backup.filename ? backup.filename : "gx.json");
+    }
+
+    function clearRecord() {
+      if (!dirty || confirm("There are changes since the last download. Are you sure you want to clear the record?")) {
+        setRecordSourceDocument(null);
+        updateRecord({}, null, false, true);
+      }
+    }
+
+    /**
+     * Take an uploaded or pasted GedcomX record OR RECORD SET and prepare the editor with it.
+     * @param recordOrRecordSet - GedcomX record [treated just like a single-record RecordSet] or GedcomX RecordSet
+     * @param filename - Filename of the GedcomX record or record set file.
+     */
+    function importRecordSet(recordOrRecordSet, filename) {
+      if (!dirty || confirm("There are changes since the last download. Are you sure you want to clear the record?")) {
+        recordInfos = [];
+        let recordSet = recordOrRecordSet.records ? recordOrRecordSet : {"records": [recordOrRecordSet]}
+        let sourceFileElement = $("#source-file");
+        setRecordSourceDocument(null, filename);
+        let recordIndex = 1;
+        for (let doc of recordSet.records) {
+          doc = fixGedcomx(doc);
+          let sourceDocument = getSourceDocument(doc);
+          let textSection = makeTextSection(null, sourceDocument ? sourceDocument.text : "Record " + recordIndex);
+          if (textSection) {
+            sourceFileElement.append(textSection);
+          }
+          let recordInfo = new RecordInfo(textSection ? textSection.id : null, doc);
+          recordInfos.push(recordInfo);
+          recordIndex++;
+        }
+        if (recordInfos.length > 0) {
+          currentRecordIndex = 0;
+          selectTextSection(recordInfos[currentRecordIndex].sectionId, true);
+        }
+      }
+    }
+
+    function uploadGedcomx(files) {
+      setRecordSourceDocument(null);
+      let recordIndex = 0;
+      recordInfos = [];
+      currentRecordIndex = -1;
+      relChart = null; // clear out any previous RelationshipChart
+      for (let f of files) {
+        let reader = new FileReader();
+        reader.onload = (function(file) {
+          return function(e) {
+            let recordSet;
+            try {
+              recordSet = JSON.parse(e.target.result);
+            }
+            catch (e) {
+              showError(e.toString());
+              return;
+            }
+            importRecordSet(recordSet, file.name);
+            $("#download-gx").attr("download", file.name ? file.name : "gx.json");
+          }
+        })(f);
+
+        reader.readAsText(f);
+        recordIndex++;
+      }
+    }
+
+    function uploadSource(files) {
+      if (!dirty || confirm("Clear the GedcomX and lose unsaved changes? (Cancel to keep GedcomX)")) {
+        updateRecord(makeEmptyRecord(), null, false, true);
+      }
+      for (let i = 0, f; f = files[i]; i++) {
+        let reader = new FileReader();
+        reader.onload = (function(file) {
+          return function(e) {
+            setRecordSourceDocument(e.target.result, file.name);
+          }
+        })(f);
+
+        reader.readAsText(f);
+      }
+    }
+
+    $(function () {
+      $("#source-viewer").hide();
+
+      editor = new JSONEditor(document.getElementById("gx-editor"), {
+        modes: ["tree", "code"],
+        onChange: function() {
+          let doc = editor.get();
+          updateRecord(doc, null, true);
+        },
+        onError: function(error) {
+          alert(error);
+        },
+        templates: [
+          {
+            text: 'Age',
+            title: 'Add an age qualifier',
+            field: 'qualifiers',
+            value: [
+              {
+                name: "http://gedcomx.org/Age",
+                value: "80"
+              }
+            ]
+          },
+          {
+            text: 'Fact',
+            title: 'Add a fact.',
+            field: 'facts',
+            value: {
+              type: 'http://gedcomx.org/Birth',
+              date: {
+                original: '01 Jan 1950'
+              },
+              place: {
+                original: 'United States'
+              }
+            }
+          }
+        ]
+      });
+
+      $("#fetch-gx").click(function () {
+        setRecordSourceDocument(null);
+
+        let sessionId = $("#session-id").val();
+        let gedcomxUrl = $("#record-url").val();
+        gedcomxUrl = gedcomxUrl + (gedcomxUrl.includes('?') ? "&sessionId=" : "?sessionId=") + sessionId;
+        $.ajax({
+           type: "GET",
+           dataType: "json",
+           accepts: { json: "application/x-gedcomx-v1+json" },
+           headers: {
+             "Accept": "application/x-gedcomx-v1+json"
+           },
+           url: gedcomxUrl,
+           success: function (gxRecordOrRecordSet, textStatus, jqKHR) {
+             importRecordSet(gxRecordOrRecordSet);
+           },
+
+           error: function (jqXHR, textStatus, errorThrown) {
+             showError("Request failed to: " + gedcomxUrl + ": " + textStatus);
+           }
+         });
+
+        let sourceUrl = $("#source-url").val();
+        if (sourceUrl) {
+          $.ajax({
+             type: "GET",
+             dataType: "text",
+             accepts: {text: "*/*"},
+             url: sourceUrl,
+             success: function (text, textStatus, jqKHR) {
+               setRecordSourceDocument(text);
+             },
+
+             error: function (jqXHR, textStatus, errorThrown) {
+               setRecordSourceDocument("Request failed to: " + sourceUrl + ": " + textStatus);
+             }
+           });
+        }
+      });
+
+      $("#paste-gx").click(function() {
+        let recordOrRecordSet;
+        try {
+          recordOrRecordSet = JSON.parse($("#pasted-gx").val());
+        }
+        catch (e) {
+          showError(e.toString());
+          return;
+        }
+
+        importRecordSet(recordOrRecordSet, null);
+
+        let src = $("#pasted-source").val();
+        if (src) {
+          setRecordSourceDocument(src);
+        }
+      });
+
+      $("#download-gx").click(function() {
+        let gx = exportGedcomx();
+        this.href = "data:text/plain;charset=UTF-8," + encodeURIComponent(gx);
+        dirty = false;
+      });
+
+      $("#copy-gx").click(function () {
+        new ClipboardJS("#copy-gx", {
+          text: function(trigger) {
+            return exportGedcomx();
+          }
+        })
+      });
+
+      $("#gxfile").filestyle({
+        text: "Choose GedcomX File",
+        input: false,
+        'onChange' : uploadGedcomx
+      });
+
+      // $("#gxrecover").click(function() {
+      //   recoverRecord(true);
+      // });
+
+      $("#record").on("drop", function(je) {
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).removeClass("dragging");
+        let files;
+        if (e.dataTransfer.items) {
+          files = [];
+          for (let i = 0; i < e.dataTransfer.items.length; i++) {
+            files.push(e.dataTransfer.items[i].getAsFile());
+          }
+        }
+        else {
+          files = e.dataTransfer.files;
+        }
+        uploadGedcomx(files);
+      }).on("dragover", function(je) {
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).addClass("dragging");
+      }).on("dragleave", function(je) {
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).removeClass("dragging");
+      });
+
+      $("#srcfile").filestyle({
+        text: "Choose Source File",
+        input: false,
+        'onChange' : uploadSource
+      });
+
+      $("#source-file").on("drop", function(je) {
+        // For some reason, dropping on a text-section is causing this function to fire.
+        // So as a workaround, ignore if not source-file.
+        if (je.target.id !== "source-file") {
+          return true;
+        }
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).removeClass("dragging");
+        let files;
+        if (e.dataTransfer.items) {
+          files = [];
+          for (let i = 0; i < e.dataTransfer.items.length; i++) {
+            files.push(e.dataTransfer.items[i].getAsFile());
+          }
+        }
+        else {
+          files = e.dataTransfer.files;
+        }
+        uploadSource(files);
+      }).on("dragover", function(je) {
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).addClass("dragging");
+      }).on("dragleave", function(je) {
+        let e = je.originalEvent;
+        e.preventDefault();
+        e.stopPropagation();
+        $(this).removeClass("dragging");
+      });
+
+      $("#edit-edit-record-metadata").click(editRecordMetadata);
+
+      $("#add-new-person").click(addPerson);
+
+      // onmouseup
+
+      $("#add-new-relationship").click(addRelationship);
+
+      $("#edit-edit-relationship").click(editRelationship);
+
+      $("#add-new-person-name").click(addPersonName);
+
+      $("#edit-person-name").click(editPersonName);
+
+      $("#add-new-person-fact").click(addPersonFact);
+
+      $("#add-new-person-fact2").click(addPersonFactMultiple);
+
+      $("#edit-edit-person-fact").click(editPersonFact);
+
+      $("#add-new-relationship-fact").click(addRelationshipFact);
+
+      $("#edit-edit-relationship-fact").click(editRelationshipFact);
+
+      $("#copy-copy-person-fact").click(copyPersonFact);
+
+      $("#add-person-button").click(updatePersonNameFromHighlight);
+
+      $(document).keydown(handleEditorKeydown);
+
+      dragElement(document.getElementById("new-person"));
+      dragElement(document.getElementById("new-relationship"));
+      // See if the tab has been reloaded, in which case we want to restored the data that would otherwise be lost.
+      recoverRecord(false);
+      // let sampleText = "Births:\n" +
+      //     "Alex, Dec. 9. " +
+      //     "¶Bob, Dec. 10." +
+      //     "¶Carol, Dec. 12.";
+      // setRecordSourceDocument(sampleText, "Sample Text with ¶");
+    });
+  </script>
+  <style>
+    #gx-editor {
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+
+    .dragging {
+      border-width: 5px;
+      border-style: dashed;
+      border-color: #6c757d;
+    }
+
+    body {
+      /*extra body padding to provide for the fixed top nav*/
+      padding-top: 4em;
+    }
+    #gedcomx-viewer {
+      padding: 50px;
+    }
+  </style>
+</head>
+<body id="gedcomx-viewer">
+
+<!--Top navigation-->
+<nav class="navbar navbar-expand-lg navbar-light bg-light fixed-top">
+  <span class="navbar-brand">View and Edit GEDCOM X</span>
+  <ul class="navbar-nav ml-auto">
+    <li class="nav-item">
+      <button type="button" class="btn btn-primary m-1" data-toggle="modal" data-target="#new-person" title="Add Person" id="add-person-button">
+        <span class="oi oi-plus"></span>
+        <span class="oi oi-person"></span>
+      </button>
+    </li>
+    <li class="nav-item">
+      <button type="button" class="btn btn-primary m-1" data-toggle="modal" data-target="#new-relationship" title="Add Relationship">
+        <span class="oi oi-plus"></span>
+        <span class="oi oi-people"></span>
+      </button>
+    </li>
+    <li class="nav-item">
+      <button type="button" class="btn btn-primary m-1" data-toggle="modal" data-target="#add-new-fact-multiple" title="Add Fact" id="add-fact-button">
+        <span class="oi oi-plus"></span>
+      </button>
+    </li>
+    <li class="nav-item">
+      <a id="copy-gx" href="#" class="btn btn-primary m-1" title="Copy GEDCOM X to Clipboard"><span class="oi oi-clipboard"></span></a>
+    </li>
+    <li class="nav-item">
+      <a id="download-gx" href="#" download="gx.json" class="btn btn-primary m-1" title="Download GedcomX"><span class="oi oi-data-transfer-download"></span></a>
+    </li>
+  </ul>
+</nav>
+
+<!--main body layout-->
+<div class="container-fluid">
+  <div class="row m-2 p-2 border">
+    <div class="col">
+      <div class="container-fluid">
+        <div class="row">
+          <div class="col">
+            <ul class="nav nav-tabs" id="input-tab" role="tablist">
+              <li class="nav-item">
+                <a class="nav-link active" id="upload-tab" data-toggle="tab" href="#upload" role="tab" aria-controls="upload" aria-selected="true">Upload</a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" id="fetch-tab" data-toggle="tab" href="#fetch" role="tab" aria-controls="fetch" aria-selected="false">Fetch</a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" id="paste-tab" data-toggle="tab" href="#paste" role="tab" aria-controls="paste" aria-selected="false">Paste</a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" id="help-tab" data-toggle="tab" href="#help" role="tab" aria-controls="help" aria-selected="false">Help</a>
+              </li>
+            </ul>
+            <div class="tab-content border border-top-0 p-4" id="input-tab-content">
+              <div class="tab-pane fade show active" id="upload" role="tabpanel" aria-labelledby="upload-tab">
+                <div class="form-group">
+                  <input type="file" id="gxfile" name="gx" data-text="Choose GedcomX File"/>
+                  &nbsp;&nbsp;<a href="" onClick="recoverRecord(true)">Recover last record</a><br/>
+                  &nbsp;&nbsp;<a href="" onClick="clearRecord()">Clear record</a>
+                  <div class="pt-4">
+                    <input type="file" class="pt-4" id="srcfile" name="src" data-text="Choose Source File"/>
+                  </div>
+                </div>
+              </div>
+              <div class="tab-pane fade" id="fetch" role="tabpanel" aria-labelledby="fetch-tab">
+                <div class="form-group">
+                  <div class="container-fluid p-0">
+                    <div class="row">
+                      <div class="col">
+                        <label for="session-id">Session Id</label>
+                        <input id="session-id" type="text" class="form-control" aria-describedby="session-id"/>
+                      </div>
+                      <div class="col">
+                        <label for="record-url">GEDCOM X URL</label>
+                        <input id="record-url" type="text" class="form-control" aria-describedby="record-url"
+                               value="https://www.familysearch.org/ark:/61903/1:1:QK2M-H538"/>
+                      </div>
+                      <div class="col">
+                        <label for="source-url">Source URL</label>
+                        <input id="source-url" type="text" class="form-control" aria-describedby="source-url"/>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <a id="fetch-gx" href="#" class="btn btn-primary">Fetch GEDCOM X</a>
+              </div>
+              <div class="tab-pane fade" id="paste" role="tabpanel" aria-labelledby="paste-tab">
+                <div class="form-group">
+                  <div class="container-fluid p-0">
+                    <div class="row">
+                      <div class="col">
+                        <label for="pasted-gx">GEDCOM X Content</label>
+                        <textarea id="pasted-gx" class="form-control" rows="10"></textarea>
+                      </div>
+                      <div class="col">
+                        <label for="pasted-source">Source Content</label>
+                        <textarea id="pasted-source" class="form-control" rows="10"></textarea>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <a id="paste-gx" href="#" class="btn btn-primary">Paste</a>
+              </div>
+              <div class="tab-pane fade" id="help" role="tabpanel" aria-labelledby="help-tab">
+                Tips:
+                <ul>
+                  <li><strong>Importing data:</strong>
+                    <ul>
+                      <li>Drag & drop GedcomX or Record Set file onto "Choose GedcomX File" button to load records.</li>
+                      <li>Drag & drop text (or NBX) file onto "Choose Source File" to load text.</li>
+                    </ul>
+                  </li>
+                  <li><strong>Handling multiple records:</strong>
+                    <ul>
+                      <li>Type Cmd/Ctrl-Enter (or "¶", Option-7 on Mac) in text area to split record.</li>
+                      <li>Type Delete at the beginning of one section to merge it into the previous one.</li>
+                      <li>Click or Tab/Shift-Tab to select a text section. The corresponding record will display.</li>
+                      <li>Drag a person from the relationship graph to a text section to move that person (and all connected relatives) to that section's record.</li>
+                      <li>Metadata "copy" (clipboard) icon copies the current record's metadata to all others. (Or if this record doesn't have it, copies the metadata of the first record that has metadata to all others)</li>
+                    </ul>
+                  </li>
+                  <li>Select text before clicking the "new person" button to pre-populate the person box with that person's name.
+                    Fix the name parts if they weren't split correctly</li>
+                  <li><strong>Undo</strong>: Cmd/Ctrl-Z will undo, and Cmd/Ctrl-Shift-Z (or Cmd/Ctrl-Y) will redo.
+                    <ul>
+                      <li>When the focus is on a text area, normal text undo/redo will happen.</li>
+                      <li>Otherwise, the latest record change or record selection will be undone/redone. (Click outside the text area if needed for this to function)</li>
+                    </ul>
+                  </li>
+                  <li><strong>Editing relationships</strong> in the relationship graph.
+                    <ul>
+                      <li>Click a person to select them. Relationship controls ("+") will appear.</li>
+                      <li>Drag a "spouse +" (on the top or bottom) to another person to create a couple relationship.</li>
+                      <li>Drag a "parent +" (on the right) to a vertical couple line to add both parent relationships at once. Or:
+                        <ul>
+                          <li>Drag a "parent +" (on the right) to another person to make that one person a parent.</li>
+                          <li>Drag a "child +" (on the left) to another person to make that person a child.</li>
+                        </ul>
+                      </li>
+                      <li>Click a vertical "family line" to select it. Click a red "x" to remove a parent or child from the family.</li>
+                    </ul>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-4">
+            <div id="source-viewer" class="sticky-top" style="max-height: 100vh; overflow: scroll">
+              <div class="pt-4">&nbsp;</div>
+              <div id="source-file" class="pt-4"></div>
+              <div id="gx-editor" class="pt-2"></div>
+              <div><span id="image-link">IMAGE LINK</span>&nbsp;&nbsp;<span id="nbx-link">ENTITY VIEWER</span></div>
+              <div id="sft-summary"></div>
+            </div>
+          </div>
+          <div class="col-8 pt-4">
+            <div id="rec-list"></div>
+            <div id="rel-chart"></div>
+            <div id="record"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--new person form modal -->
+<div class="modal fade" id="alert" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-body" >
+        <div class="alert alert-danger"><span class="oi oi-warning mr-2"></span><span id="alert-container"></span></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--new person form modal -->
+<div class="modal fade" id="new-person" tabindex="-1" role="dialog" aria-labelledby="new-person-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title drag-header" id="new-person-label">Add Person<span class="drag-handle"> |||</span></h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-person-form">
+        <label for="new-person-prefixes">Prefix(es)</label>
+        <input id="new-person-prefixes" type="text" class="form-control"/>
+        <label for="new-person-given-names">Given Name(s)</label>
+        <input id="new-person-given-names" type="text" class="form-control"/>
+        <label for="new-person-surnames">Surname(s)</label>
+        <input id="new-person-surnames" type="text" class="form-control"/>
+        <label for="new-person-suffixes">Suffix(es)</label>
+        <input id="new-person-suffixes" type="text" class="form-control"/>
+        <div class="form-check">
+          <input class="form-check-input" id="new-person-principal" type="checkbox" value=""/>
+          <label class="form-check-label" for="new-person-principal">Principal</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" id="new-person-male" type="radio" name="new-person-gender" value="http://gedcomx.org/Male"/>
+          <label class="form-check-label" for="new-person-male">Male</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" id="new-person-female" type="radio" name="new-person-gender" value="http://gedcomx.org/Female"/>
+          <label class="form-check-label" for="new-person-female">Female</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" id="new-person-unknown" type="radio" name="new-person-gender" value="http://gedcomx.org/Unknown" checked/>
+          <label class="form-check-label" for="new-person-unknown">Unknown Gender</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="add-new-person" type="button" class="btn btn-primary">Add Person</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--new relationship form modal-->
+<div class="modal fade" id="new-relationship" tabindex="-1" role="dialog" aria-labelledby="new-relationship-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title drag-header" id="new-relationship-label">Add Relationship<span class="drag-handle"> |||</span></h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-relationship-form">
+        <label for="new-relationship-type">Relationship Type (P1 is the ___ of P2)</label>
+        <select class="form-control" id="new-relationship-type">
+          <option value="http://gedcomx.org/Couple">Couple</option>
+          <option value="http://gedcomx.org/ParentChild">Parent-Child</option>
+          <option disabled>──────────</option>
+          <option value="http://familysearch.org/types/relationships/DivorcedCouple">Divorced Couple</option>
+          <option value="http://familysearch.org/types/relationships/Fiance">Fiancé</option>
+          <option value="http://familysearch.org/types/relationships/DomesticPartnership">Domestic Partnership</option>
+          <option value="http://familysearch.org/types/relationships/Sibling">Sibling</option>
+          <option value="http://familysearch.org/types/relationships/Grandparent">Grand Parent</option>
+          <option value="http://familysearch.org/types/relationships/GreatGrandparent">Great Grand Parent</option>
+          <option value="http://familysearch.org/types/relationships/SiblingInLaw">Sibling-In-Law</option>
+          <option value="http://familysearch.org/types/relationships/StepSibling">Step-Sibling</option>
+          <option value="http://familysearch.org/types/relationships/ParentChildInLaw">Parent-Child-In-Law</option>
+          <option value="http://familysearch.org/types/relationships/StepParentChild">Step-Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/GuardianParentChild">Guardian Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/SurrogateParentChild">Surrogate Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/AuntOrUncle">Aunt/Uncle</option>
+          <option value="http://familysearch.org/types/relationships/Cousin">Cousin</option>
+          <option value="http://familysearch.org/types/relationships/Godparent">Godparent</option>
+          <option value="http://familysearch.org/types/relationships/Descendant">Descendant</option>
+          <option value="http://familysearch.org/types/relationships/Relative">Relative</option>
+          <option value="http://familysearch.org/types/relationships/NonRelative">NonRelative</option>
+          <option value="http://familysearch.org/types/relationships/Unknown">Unknown</option>
+        </select>
+        <label for="new-relationship-person-1" id="new-relationship-person-1-label">Person(s) 1</label>
+        <select multiple class="form-control" id="new-relationship-person-1">
+        </select>
+        <label for="new-relationship-person-2" id="new-relationship-person-2-label">Person(s) 2</label>
+        <select multiple class="form-control" id="new-relationship-person-2">
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="add-new-relationship" type="button" class="btn btn-primary">Add Relationship</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--edit relationship form modal-->
+<div class="modal fade" id="edit-relationship" tabindex="-1" role="dialog" aria-labelledby="edit-relationship-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-relationship-label">Update Relationship</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="edit-relationship-form">
+        <input id="edit-relationship-id" type="hidden">
+        <label for="edit-relationship-type">Relationship Type</label>
+        <select class="form-control" id="edit-relationship-type">
+          <option value="http://gedcomx.org/Couple">Couple</option>
+          <option value="http://gedcomx.org/ParentChild">Parent-Child</option>
+          <option disabled>──────────</option>
+          <option value="http://familysearch.org/types/relationships/DivorcedCouple">Divorced Couple</option>
+          <option value="http://familysearch.org/types/relationships/Fiance">Fiancé/Fiancée</option>
+          <option value="http://familysearch.org/types/relationships/DomesticPartnership">Domestic Partnership</option>
+          <option value="http://familysearch.org/types/relationships/Sibling">Sibling</option>
+          <option value="http://familysearch.org/types/relationships/Grandparent">Grand Parent</option>
+          <option value="http://familysearch.org/types/relationships/GreatGrandparent">Great Grand Parent</option>
+          <option value="http://familysearch.org/types/relationships/SiblingInLaw">Sibling-In-Law</option>
+          <option value="http://familysearch.org/types/relationships/StepSibling">Step-Sibling</option>
+          <option value="http://familysearch.org/types/relationships/ParentChildInLaw">Parent-Child-In-Law</option>
+          <option value="http://familysearch.org/types/relationships/StepParentChild">Step-Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/GuardianParentChild">Guardian Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/SurrogateParentChild">Surrogate Parent-Child</option>
+          <option value="http://familysearch.org/types/relationships/AuntOrUncle">Aunt/Uncle</option>
+          <option value="http://familysearch.org/types/relationships/Cousin">Cousin</option>
+          <option value="http://familysearch.org/types/relationships/Godparent">Godparent</option>
+          <option value="http://familysearch.org/types/relationships/Descendant">Descendant</option>
+          <option value="http://familysearch.org/types/relationships/Relative">Relative</option>
+          <option value="http://familysearch.org/types/relationships/NonRelative">NonRelative</option>
+          <option value="http://familysearch.org/types/relationships/Unknown">Unknown</option>
+        </select>
+        <label for="edit-relationship-person-1" id="edit-relationship-person-1-label">Person 1</label>
+        <select class="form-control" id="edit-relationship-person-1">
+        </select>
+        <label for="edit-relationship-person-2" id="edit-relationship-person-2-label">Person 2</label>
+        <select class="form-control" id="edit-relationship-person-2">
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="edit-edit-relationship" type="button" class="btn btn-primary">Update Relationship</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!--new fact form modal-->
+<div class="modal fade" id="add-new-fact-multiple" tabindex="-1" role="dialog" aria-labelledby="add-new-fact-multiple-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="add-new-fact-multiple-label">Add Multiple Facts</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-person-fact-multiple-form">
+        <input type="hidden" id="new-person-fact-multiple-person-id"/>
+        <label for="new-person-fact-type">Fact Type</label>
+        <select class="form-control" id="new-person-fact-multiple-type">
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option disabled>──────────</option>
+          <option value="http://gedcomx.org/Adoption">Adoption</option>
+          <option value="http://gedcomx.org/AdultChristening">Adult Christening</option>
+          <option value="http://gedcomx.org/Amnesty">Amnesty</option>
+          <option value="http://gedcomx.org/Apprenticeship">Apprenticeship</option>
+          <option value="http://gedcomx.org/Arrest">Arrest</option>
+          <option value="http://gedcomx.org/Award">Award</option>
+          <option value="http://gedcomx.org/Baptism">Baptism</option>
+          <option value="http://gedcomx.org/BarMitzvah">Bar Mitzvah</option>
+          <option value="http://gedcomx.org/BatMitzvah">Bat Mitzvah</option>
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/BirthNotice">Birth Notice</option>
+          <option value="http://gedcomx.org/Blessing">Blessing</option>
+          <option value="http://gedcomx.org/Burial">Burial</option>
+          <option value="http://gedcomx.org/Caste">Caste</option>
+          <option value="http://gedcomx.org/Census">Census</option>
+          <option value="http://gedcomx.org/Christening">Christening</option>
+          <option value="http://gedcomx.org/Circumcision">Circumcision</option>
+          <option value="http://gedcomx.org/Clan">Clan</option>
+          <option value="http://gedcomx.org/Confirmation">Confirmation</option>
+          <option value="http://gedcomx.org/Court">Court</option>
+          <option value="http://gedcomx.org/Cremation">Cremation</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option value="http://gedcomx.org/Education">Education</option>
+          <option value="http://gedcomx.org/EducationEnrollment">Education Enrollment</option>
+          <option value="http://gedcomx.org/Emigration">Emigration</option>
+          <option value="http://gedcomx.org/Ethnicity">Ethnicity</option>
+          <option value="http://gedcomx.org/Excommunication">Excommunication</option>
+          <option value="http://gedcomx.org/FirstCommunion">First Communion</option>
+          <option value="http://gedcomx.org/Funeral">Funeral</option>
+          <option value="http://gedcomx.org/GenderChange">Gender Change</option>
+          <option value="http://gedcomx.org/Graduation">Graduation</option>
+          <option value="http://gedcomx.org/Heimat">Heimat</option>
+          <option value="http://gedcomx.org/Immigration">Immigration</option>
+          <option value="http://gedcomx.org/Imprisonment">Imprisonment</option>
+          <option value="http://gedcomx.org/Inquest">Inquest</option>
+          <option value="http://gedcomx.org/LandTransaction">Land Transaction</option>
+          <option value="http://gedcomx.org/Language">Language</option>
+          <option value="http://gedcomx.org/Living">Living</option>
+          <option value="http://gedcomx.org/MaritalStatus">Marital Status</option>
+          <option value="http://gedcomx.org/Medical">Medical</option>
+          <option value="http://gedcomx.org/MilitaryAward">Military Award</option>
+          <option value="http://gedcomx.org/MilitaryDischarge">Military Discharge</option>
+          <option value="http://gedcomx.org/MilitaryDraftRegistration">Military Draft Registration</option>
+          <option value="http://gedcomx.org/MilitaryInduction">Military Induction</option>
+          <option value="http://gedcomx.org/MilitaryService">Military Service</option>
+          <option value="http://gedcomx.org/Mission">Mission</option>
+          <option value="http://gedcomx.org/MoveFrom">Move From</option>
+          <option value="http://gedcomx.org/MoveTo">Move To</option>
+          <option value="http://gedcomx.org/MultipleBirth">Multiple Birth</option>
+          <option value="http://gedcomx.org/NationalId">National Id</option>
+          <option value="http://gedcomx.org/Nationality">Nationality</option>
+          <option value="http://gedcomx.org/Naturalization">Naturalization</option>
+          <option value="http://gedcomx.org/NumberOfChildren">Number of Children</option>
+          <option value="http://gedcomx.org/NumberOfMarriages">Number of Marriages</option>
+          <option value="http://gedcomx.org/Obituary">Obituary</option>
+          <option value="http://gedcomx.org/Occupation">Occupation</option>
+          <option value="http://gedcomx.org/Ordination">Ordination</option>
+          <option value="http://gedcomx.org/Pardon">Pardon</option>
+          <option value="http://gedcomx.org/PhysicalDescription">Physical Description</option>
+          <option value="http://gedcomx.org/Probate">Probate</option>
+          <option value="http://gedcomx.org/Property">Property</option>
+          <option value="http://gedcomx.org/Race">Race</option>
+          <option value="http://gedcomx.org/Religion">Religion</option>
+          <option value="http://gedcomx.org/Residence">Residence</option>
+          <option value="http://gedcomx.org/Retirement">Retirement</option>
+          <option value="http://gedcomx.org/Stillbirth">Stillbirth</option>
+          <option value="http://gedcomx.org/TaxAssessment">Tax Assessment</option>
+          <option value="http://gedcomx.org/Tribe">Tribe</option>
+          <option value="http://gedcomx.org/Will">Will</option>
+          <option value="http://gedcomx.org/Visit">Visit</option>
+          <option value="http://gedcomx.org/Yahrzeit">Yahrzeit</option>
+        </select>
+        <label for="new-relationship-person-3" id="new-relationship-person-3-label">Person(s)</label>
+        <select multiple class="form-control" id="new-relationship-person-3">
+        </select>
+      <div class="form-check">
+        <input class="form-check-input" id="new-person-fact-primary2" type="checkbox" value=""/>
+        <label class="form-check-label" for="new-person-fact-primary">Primary</label>
+      </div>
+      <label for="new-person-fact-date">Date</label>
+      <input id="new-person-fact-date2" type="text" class="form-control"/>
+      <label for="new-person-fact-place">Place</label>
+      <input id="new-person-fact-place2" type="text" class="form-control"/>
+      <label for="new-person-fact-value">Value</label>
+      <input id="new-person-fact-value2" type="text" class="form-control"/>
+      <label for="new-person-fact-age">Age</label>
+      <input id="new-person-fact-age2" type="text" class="form-control"/>
+      <label for="new-person-fact-cause">Cause</label>
+      <input id="new-person-fact-cause2" type="text" class="form-control"/>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+      <button id="add-new-person-fact2" type="button" class="btn btn-primary">Add Fact</button>
+    </div>
+    </div>
+    </div>
+  </div>
+</div>
+
+<!--new name form modal-->
+<div class="modal fade" id="new-name" tabindex="-1" role="dialog" aria-labelledby="new-name-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="new-name-label">Add Name</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-person-name-form">
+        <input type="hidden" id="new-person-name-person-id"/>
+        <label for="new-person-name-type">Name Type</label>
+        <select class="form-control" id="new-person-name-type">
+          <option value="">(None)</option>
+          <option value="http://gedcomx.org/BirthName">Birth Name</option>
+          <option value="http://gedcomx.org/MarriedName">Married Name</option>
+          <option value="http://gedcomx.org/AlsoKnownAs">Also Known As</option>
+          <option value="http://gedcomx.org/Nickname">Nickname</option>
+          <option value="http://gedcomx.org/FormalName">Formal Name</option>
+          <option value="http://gedcomx.org/ReligiousName">Religious Name</option>
+        </select>
+        <label for="new-person-name-prefix">Prefix(es)</label>
+        <input id="new-person-name-prefix" type="text" class="form-control"/>
+        <label for="new-person-name-given-names">Given Name(s)</label>
+        <input id="new-person-name-given-names" type="text" class="form-control"/>
+        <label for="new-person-name-surnames">Surname(s)</label>
+        <input id="new-person-name-surnames" type="text" class="form-control"/>
+        <label for="new-person-name-suffix">Suffix(es)</label>
+        <input id="new-person-name-suffix" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="add-new-person-name" type="button" class="btn btn-primary">Add Name</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--edit name form modal-->
+<div class="modal fade" id="edit-name" tabindex="-1" role="dialog" aria-labelledby="edit-name-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-name-label">Update Name</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="edit-person-name-form">
+        <input type="hidden" id="edit-person-name-person-id"/>
+        <input type="hidden" id="edit-person-name-name-id"/>
+        <label for="edit-person-name-type">Name Type</label>
+        <select class="form-control" id="edit-person-name-type">
+          <option value="">(None)</option>
+          <option value="http://gedcomx.org/BirthName">Birth Name</option>
+          <option value="http://gedcomx.org/MarriedName">Married Name</option>
+          <option value="http://gedcomx.org/AlsoKnownAs">Also Known As</option>
+          <option value="http://gedcomx.org/Nickname">Nickname</option>
+          <option value="http://gedcomx.org/FormalName">Formal Name</option>
+          <option value="http://gedcomx.org/ReligiousName">Religious Name</option>
+        </select>
+        <label for="edit-person-name-prefix">Prefix(es)</label>
+        <input id="edit-person-name-prefix" type="text" class="form-control"/>
+        <label for="edit-person-name-given-names">Given Name(s)</label>
+        <input id="edit-person-name-given-names" type="text" class="form-control"/>
+        <label for="edit-person-name-surnames">Surname(s)</label>
+        <input id="edit-person-name-surnames" type="text" class="form-control"/>
+        <label for="edit-person-name-suffix">Suffix(es)</label>
+        <input id="edit-person-name-suffix" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="edit-person-name" type="button" class="btn btn-primary">Update Name</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--new person fact form modal-->
+<div class="modal fade" id="new-person-fact" tabindex="-1" role="dialog" aria-labelledby="new-fact-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="new-fact-label">Add Fact</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-person-fact-form">
+        <input type="hidden" id="new-person-fact-person-id"/>
+        <label for="new-person-fact-type">Fact Type</label>
+        <select class="form-control" id="new-person-fact-type">
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option disabled>──────────</option>
+          <option value="http://gedcomx.org/Adoption">Adoption</option>
+          <option value="http://gedcomx.org/AdultChristening">Adult Christening</option>
+          <option value="http://gedcomx.org/Amnesty">Amnesty</option>
+          <option value="http://gedcomx.org/Apprenticeship">Apprenticeship</option>
+          <option value="http://gedcomx.org/Arrest">Arrest</option>
+          <option value="http://gedcomx.org/Award">Award</option>
+          <option value="http://gedcomx.org/Baptism">Baptism</option>
+          <option value="http://gedcomx.org/BarMitzvah">Bar Mitzvah</option>
+          <option value="http://gedcomx.org/BatMitzvah">Bat Mitzvah</option>
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/BirthNotice">Birth Notice</option>
+          <option value="http://gedcomx.org/Blessing">Blessing</option>
+          <option value="http://gedcomx.org/Burial">Burial</option>
+          <option value="http://gedcomx.org/Caste">Caste</option>
+          <option value="http://gedcomx.org/Census">Census</option>
+          <option value="http://gedcomx.org/Christening">Christening</option>
+          <option value="http://gedcomx.org/Circumcision">Circumcision</option>
+          <option value="http://gedcomx.org/Clan">Clan</option>
+          <option value="http://gedcomx.org/Confirmation">Confirmation</option>
+          <option value="http://gedcomx.org/Court">Court</option>
+          <option value="http://gedcomx.org/Cremation">Cremation</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option value="http://gedcomx.org/Education">Education</option>
+          <option value="http://gedcomx.org/EducationEnrollment">Education Enrollment</option>
+          <option value="http://gedcomx.org/Emigration">Emigration</option>
+          <option value="http://gedcomx.org/Ethnicity">Ethnicity</option>
+          <option value="http://gedcomx.org/Excommunication">Excommunication</option>
+          <option value="http://gedcomx.org/FirstCommunion">First Communion</option>
+          <option value="http://gedcomx.org/Funeral">Funeral</option>
+          <option value="http://gedcomx.org/GenderChange">Gender Change</option>
+          <option value="http://gedcomx.org/Graduation">Graduation</option>
+          <option value="http://gedcomx.org/Heimat">Heimat</option>
+          <option value="http://gedcomx.org/Immigration">Immigration</option>
+          <option value="http://gedcomx.org/Imprisonment">Imprisonment</option>
+          <option value="http://gedcomx.org/Inquest">Inquest</option>
+          <option value="http://gedcomx.org/LandTransaction">Land Transaction</option>
+          <option value="http://gedcomx.org/Language">Language</option>
+          <option value="http://gedcomx.org/Living">Living</option>
+          <option value="http://gedcomx.org/MaritalStatus">Marital Status</option>
+          <option value="http://gedcomx.org/Medical">Medical</option>
+          <option value="http://gedcomx.org/MilitaryAward">Military Award</option>
+          <option value="http://gedcomx.org/MilitaryDischarge">Military Discharge</option>
+          <option value="http://gedcomx.org/MilitaryDraftRegistration">Military Draft Registration</option>
+          <option value="http://gedcomx.org/MilitaryInduction">Military Induction</option>
+          <option value="http://gedcomx.org/MilitaryService">Military Service</option>
+          <option value="http://gedcomx.org/Mission">Mission</option>
+          <option value="http://gedcomx.org/MoveFrom">Move From</option>
+          <option value="http://gedcomx.org/MoveTo">Move To</option>
+          <option value="http://gedcomx.org/MultipleBirth">Multiple Birth</option>
+          <option value="http://gedcomx.org/NationalId">National Id</option>
+          <option value="http://gedcomx.org/Nationality">Nationality</option>
+          <option value="http://gedcomx.org/Naturalization">Naturalization</option>
+          <option value="http://gedcomx.org/NumberOfChildren">Number of Children</option>
+          <option value="http://gedcomx.org/NumberOfMarriages">Number of Marriages</option>
+          <option value="http://gedcomx.org/Obituary">Obituary</option>
+          <option value="http://gedcomx.org/Occupation">Occupation</option>
+          <option value="http://gedcomx.org/Ordination">Ordination</option>
+          <option value="http://gedcomx.org/Pardon">Pardon</option>
+          <option value="http://gedcomx.org/PhysicalDescription">Physical Description</option>
+          <option value="http://gedcomx.org/Probate">Probate</option>
+          <option value="http://gedcomx.org/Property">Property</option>
+          <option value="http://gedcomx.org/Race">Race</option>
+          <option value="http://gedcomx.org/Religion">Religion</option>
+          <option value="http://gedcomx.org/Residence">Residence</option>
+          <option value="http://gedcomx.org/Retirement">Retirement</option>
+          <option value="http://gedcomx.org/Stillbirth">Stillbirth</option>
+          <option value="http://gedcomx.org/TaxAssessment">Tax Assessment</option>
+          <option value="http://gedcomx.org/Tribe">Tribe</option>
+          <option value="http://gedcomx.org/Will">Will</option>
+          <option value="http://gedcomx.org/Visit">Visit</option>
+          <option value="http://gedcomx.org/Yahrzeit">Yahrzeit</option>
+        </select>
+        <div class="form-check">
+          <input class="form-check-input" id="new-person-fact-primary" type="checkbox" value=""/>
+          <label class="form-check-label" for="new-person-fact-primary">Primary</label>                       
+        </div>
+        <label for="new-person-fact-date">Date</label>
+        <input id="new-person-fact-date" type="text" class="form-control"/>
+        <label for="new-person-fact-place">Place</label>
+        <input id="new-person-fact-place" type="text" class="form-control"/>
+        <label for="new-person-fact-value">Value</label>
+        <input id="new-person-fact-value" type="text" class="form-control"/>
+        <label for="new-person-fact-age">Age</label>
+        <input id="new-person-fact-age" type="text" class="form-control"/>
+        <label for="new-person-fact-cause">Cause</label>
+        <input id="new-person-fact-cause" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="add-new-person-fact" type="button" class="btn btn-primary">Add Fact</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--edit person fact form modal-->
+<div class="modal fade" id="edit-person-fact" tabindex="-1" role="dialog" aria-labelledby="edit-fact-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-fact-label">Update Fact</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="edit-person-fact-form">
+        <input type="hidden" id="edit-person-fact-person-id"/>
+        <input type="hidden" id="edit-person-fact-fact-id"/>
+        <label for="edit-person-fact-type">Fact Type</label>
+        <select class="form-control" id="edit-person-fact-type">
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option disabled>──────────</option>
+          <option value="http://gedcomx.org/Adoption">Adoption</option>
+          <option value="http://gedcomx.org/AdultChristening">Adult Christening</option>
+          <option value="http://gedcomx.org/Amnesty">Amnesty</option>
+          <option value="http://gedcomx.org/Apprenticeship">Apprenticeship</option>
+          <option value="http://gedcomx.org/Arrest">Arrest</option>
+          <option value="http://gedcomx.org/Award">Award</option>
+          <option value="http://gedcomx.org/Baptism">Baptism</option>
+          <option value="http://gedcomx.org/BarMitzvah">Bar Mitzvah</option>
+          <option value="http://gedcomx.org/BatMitzvah">Bat Mitzvah</option>
+          <option value="http://gedcomx.org/Birth">Birth</option>
+          <option value="http://gedcomx.org/BirthNotice">Birth Notice</option>
+          <option value="http://gedcomx.org/Blessing">Blessing</option>
+          <option value="http://gedcomx.org/Burial">Burial</option>
+          <option value="http://gedcomx.org/Caste">Caste</option>
+          <option value="http://gedcomx.org/Census">Census</option>
+          <option value="http://gedcomx.org/Christening">Christening</option>
+          <option value="http://gedcomx.org/Circumcision">Circumcision</option>
+          <option value="http://gedcomx.org/Clan">Clan</option>
+          <option value="http://gedcomx.org/Confirmation">Confirmation</option>
+          <option value="http://gedcomx.org/Court">Court</option>
+          <option value="http://gedcomx.org/Cremation">Cremation</option>
+          <option value="http://gedcomx.org/Death">Death</option>
+          <option value="http://gedcomx.org/Education">Education</option>
+          <option value="http://gedcomx.org/EducationEnrollment">Education Enrollment</option>
+          <option value="http://gedcomx.org/Emigration">Emigration</option>
+          <option value="http://gedcomx.org/Ethnicity">Ethnicity</option>
+          <option value="http://gedcomx.org/Excommunication">Excommunication</option>
+          <option value="http://gedcomx.org/FirstCommunion">First Communion</option>
+          <option value="http://gedcomx.org/Funeral">Funeral</option>
+          <option value="http://gedcomx.org/GenderChange">Gender Change</option>
+          <option value="http://gedcomx.org/Graduation">Graduation</option>
+          <option value="http://gedcomx.org/Heimat">Heimat</option>
+          <option value="http://gedcomx.org/Immigration">Immigration</option>
+          <option value="http://gedcomx.org/Imprisonment">Imprisonment</option>
+          <option value="http://gedcomx.org/Inquest">Inquest</option>
+          <option value="http://gedcomx.org/LandTransaction">Land Transaction</option>
+          <option value="http://gedcomx.org/Language">Language</option>
+          <option value="http://gedcomx.org/Living">Living</option>
+          <option value="http://gedcomx.org/MaritalStatus">Marital Status</option>
+          <option value="http://gedcomx.org/Medical">Medical</option>
+          <option value="http://gedcomx.org/MilitaryAward">Military Award</option>
+          <option value="http://gedcomx.org/MilitaryDischarge">Military Discharge</option>
+          <option value="http://gedcomx.org/MilitaryDraftRegistration">Military Draft Registration</option>
+          <option value="http://gedcomx.org/MilitaryInduction">Military Induction</option>
+          <option value="http://gedcomx.org/MilitaryService">Military Service</option>
+          <option value="http://gedcomx.org/Mission">Mission</option>
+          <option value="http://gedcomx.org/MoveFrom">Move From</option>
+          <option value="http://gedcomx.org/MoveTo">Move To</option>
+          <option value="http://gedcomx.org/MultipleBirth">Multiple Birth</option>
+          <option value="http://gedcomx.org/NationalId">National Id</option>
+          <option value="http://gedcomx.org/Nationality">Nationality</option>
+          <option value="http://gedcomx.org/Naturalization">Naturalization</option>
+          <option value="http://gedcomx.org/NumberOfChildren">Number of Children</option>
+          <option value="http://gedcomx.org/NumberOfMarriages">Number of Marriages</option>
+          <option value="http://gedcomx.org/Obituary">Obituary</option>
+          <option value="http://gedcomx.org/Occupation">Occupation</option>
+          <option value="http://gedcomx.org/Ordination">Ordination</option>
+          <option value="http://gedcomx.org/Pardon">Pardon</option>
+          <option value="http://gedcomx.org/PhysicalDescription">Physical Description</option>
+          <option value="http://gedcomx.org/Probate">Probate</option>
+          <option value="http://gedcomx.org/Property">Property</option>
+          <option value="http://gedcomx.org/Race">Race</option>
+          <option value="http://gedcomx.org/Religion">Religion</option>
+          <option value="http://gedcomx.org/Residence">Residence</option>
+          <option value="http://gedcomx.org/Retirement">Retirement</option>
+          <option value="http://gedcomx.org/Stillbirth">Stillbirth</option>
+          <option value="http://gedcomx.org/TaxAssessment">Tax Assessment</option>
+          <option value="http://gedcomx.org/Tribe">Tribe</option>
+          <option value="http://gedcomx.org/Will">Will</option>
+          <option value="http://gedcomx.org/Visit">Visit</option>
+          <option value="http://gedcomx.org/Yahrzeit">Yahrzeit</option>
+        </select>
+        <div class="form-check">
+          <input class="form-check-input" id="edit-person-fact-primary" type="checkbox" value=""/>
+          <label class="form-check-label" for="edit-person-fact-primary">Primary</label>
+        </div>
+        <label for="edit-person-fact-date">Date</label>
+        <input id="edit-person-fact-date" type="text" class="form-control"/>
+        <label for="edit-person-fact-place">Place</label>
+        <input id="edit-person-fact-place" type="text" class="form-control"/>
+        <label for="edit-person-fact-value">Value</label>
+        <input id="edit-person-fact-value" type="text" class="form-control"/>
+        <label for="edit-person-fact-age">Age</label>
+        <input id="edit-person-fact-age" type="text" class="form-control"/>
+        <label for="edit-person-fact-cause">Cause</label>
+        <input id="edit-person-fact-cause" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="edit-edit-person-fact" type="button" class="btn btn-primary">Update Fact</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--new relationship fact form modal-->
+<div class="modal fade" id="new-relationship-fact" tabindex="-1" role="dialog" aria-labelledby="new-relationship-fact-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="new-relationship-fact-label">Add Fact</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="new-relationship-fact-form">
+        <input type="hidden" id="new-relationship-fact-relationship-id"/>
+        <label for="new-relationship-fact-type">Fact Type</label>
+        <select class="form-control" id="new-relationship-fact-type">
+          <option disabled>──Couple Types──</option>
+          <option value="http://gedcomx.org/Annulment">Annulment</option>
+          <option value="http://gedcomx.org/CommonLawMarriage">Common Law Marriage</option>
+          <option value="http://gedcomx.org/CivilUnion">Civil Union</option>
+          <option value="http://gedcomx.org/Divorce">Divorce</option>
+          <option value="http://gedcomx.org/DivorceFiling">Divorce Filing</option>
+          <option value="http://gedcomx.org/DomesticPartnership">Domestic Partnership</option>
+          <option value="http://gedcomx.org/Engagement">Engagement</option>
+          <option value="http://gedcomx.org/Marriage" selected="selected">Marriage</option>
+          <option value="http://gedcomx.org/MarriageBanns">Marriage Banns</option>
+          <option value="http://gedcomx.org/MarriageContract">Marriage Contract</option>
+          <option value="http://gedcomx.org/MarriageLicense">Marriage License</option>
+          <option value="http://gedcomx.org/MarriageNotice">Marriage Notice</option>
+          <option value="http://gedcomx.org/NumberOfChildren">Number of Children</option>
+          <option value="http://gedcomx.org/Separation">Separation</option>
+          <option disabled>──Parent-Child Types──</option>
+          <option value="http://gedcomx.org/AdoptiveParent">Adoptive Parent</option>
+          <option value="http://gedcomx.org/BiologicalParent">Biological Parent</option>
+          <option value="http://gedcomx.org/FosterParent">Foster Parent</option>
+          <option value="http://gedcomx.org/GuardianParent">Guardian Parent</option>
+          <option value="http://gedcomx.org/StepParent">Stepparent</option>
+          <option value="http://gedcomx.org/SociologicalParent">Sociological Parent</option>
+          <option value="http://gedcomx.org/SurrogateParent">Surrogate Parent</option>
+        </select>
+        <div class="form-check">
+          <input class="form-check-input" id="new-relationship-fact-primary" type="checkbox" value=""/>
+          <label class="form-check-label" for="new-relationship-fact-primary">Primary</label>
+        </div>
+        <label for="new-relationship-fact-date">Date</label>
+        <input id="new-relationship-fact-date" type="text" class="form-control"/>
+        <label for="new-relationship-fact-place">Place</label>
+        <input id="new-relationship-fact-place" type="text" class="form-control"/>
+        <label for="new-relationship-fact-value">Value</label>
+        <input id="new-relationship-fact-value" type="text" class="form-control"/>
+        <label for="new-relationship-fact-age">Age</label>
+        <input id="new-relationship-fact-age" type="text" class="form-control"/>
+        <label for="new-relationship-fact-cause">Cause</label>
+        <input id="new-relationship-fact-cause" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="add-new-relationship-fact" type="button" class="btn btn-primary">Add Fact</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--edit relationship fact form modal-->
+<div class="modal fade" id="edit-relationship-fact" tabindex="-1" role="dialog" aria-labelledby="edit-relationship-fact-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-relationship-fact-label">Update Fact</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="edit-relationship-fact-form">
+        <input type="hidden" id="edit-relationship-fact-relationship-id"/>
+        <input type="hidden" id="edit-relationship-fact-fact-id"/>
+        <label for="edit-relationship-fact-type">Fact Type</label>
+        <select class="form-control" id="edit-relationship-fact-type">
+          <option disabled>──Couple Types──</option>
+          <option value="http://gedcomx.org/Annulment">Annulment</option>
+          <option value="http://gedcomx.org/CommonLawMarriage">Common Law Marriage</option>
+          <option value="http://gedcomx.org/CivilUnion">Civil Union</option>
+          <option value="http://gedcomx.org/Divorce">Divorce</option>
+          <option value="http://gedcomx.org/DivorceFiling">Divorce Filing</option>
+          <option value="http://gedcomx.org/DomesticPartnership">Domestic Partnership</option>
+          <option value="http://gedcomx.org/Engagement">Engagement</option>
+          <option value="http://gedcomx.org/Marriage" selected="selected">Marriage</option>
+          <option value="http://gedcomx.org/MarriageBanns">Marriage Banns</option>
+          <option value="http://gedcomx.org/MarriageContract">Marriage Contract</option>
+          <option value="http://gedcomx.org/MarriageLicense">Marriage License</option>
+          <option value="http://gedcomx.org/MarriageNotice">Marriage Notice</option>
+          <option value="http://gedcomx.org/NumberOfChildren">Number of Children</option>
+          <option value="http://gedcomx.org/Separation">Separation</option>
+          <option disabled>──Parent-Child Types──</option>
+          <option value="http://gedcomx.org/AdoptiveParent">Adoptive Parent</option>
+          <option value="http://gedcomx.org/BiologicalParent">Biological Parent</option>
+          <option value="http://gedcomx.org/FosterParent">Foster Parent</option>
+          <option value="http://gedcomx.org/GuardianParent">Guardian Parent</option>
+          <option value="http://gedcomx.org/StepParent">Stepparent</option>
+          <option value="http://gedcomx.org/SociologicalParent">Sociological Parent</option>
+          <option value="http://gedcomx.org/SurrogateParent">Surrogate Parent</option>
+        </select>
+        <div class="form-check">
+          <input class="form-check-input" id="edit-relationship-fact-primary" type="checkbox" value=""/>
+          <label class="form-check-label" for="edit-relationship-fact-primary">Primary</label>
+        </div>
+        <label for="edit-relationship-fact-date">Date</label>
+        <input id="edit-relationship-fact-date" type="text" class="form-control"/>
+        <label for="edit-relationship-fact-place">Place</label>
+        <input id="edit-relationship-fact-place" type="text" class="form-control"/>
+        <label for="edit-relationship-fact-value">Value</label>
+        <input id="edit-relationship-fact-value" type="text" class="form-control"/>
+        <label for="edit-relationship-fact-age">Age</label>
+        <input id="edit-relationship-fact-age" type="text" class="form-control"/>
+        <label for="edit-relationship-fact-cause">Cause</label>
+        <input id="edit-relationship-fact-cause" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="edit-edit-relationship-fact" type="button" class="btn btn-primary">Update Fact</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--copy person fact form modal-->
+<div class="modal fade" id="copy-person-fact" tabindex="-1" role="dialog" aria-labelledby="copy-person-fact-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="copy-person-fact-label">Copy Fact</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="copy-person-fact-form">
+        <input type="hidden" id="copy-person-fact-person-id"/>
+        <input type="hidden" id="copy-person-fact-fact-id"/>
+        <div class="form-group">
+          <label for="copy-person-fact-target-persons">Target Person(s)</label>
+          <select multiple class="form-control" id="copy-person-fact-target-persons">
+
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="copy-copy-person-fact" type="button" class="btn btn-primary">Copy Fact</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--edit record fact form modal-->
+<div class="modal fade" id="edit-record-metadata" tabindex="-1" role="dialog" aria-labelledby="edit-record-metadata-label" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="edit-record-metadata-label">Update Record Metadata</h5>
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <div class="modal-body" id="edit-record-metadata-form">
+        <label for="edit-record-metadata-title">Title</label>
+        <input id="edit-record-metadata-title" type="text" class="form-control"/>
+        <label for="edit-record-metadata-type">Record Type</label>
+        <select class="form-control" id="edit-record-metadata-type">
+          <option value="Birth">Birth</option>
+          <option value="Obituary">Obituary</option>
+          <option value="Marriage">Marriage</option>
+          <option disabled>──────────</option>
+          <option value="Admission">Admission</option>
+          <option value="Adoption">Adoption</option>
+          <option value="Affidavit">Affidavit</option>
+          <option value="Application">Application</option>
+          <option value="Arrival">Arrival</option>
+          <option value="Bank">Bank</option>
+          <option value="Baptism">Baptism</option>
+          <option value="Birth">Birth</option>
+          <option value="Burial">Burial</option>
+          <option value="Business">Business</option>
+          <option value="Cemetery">Cemetery</option>
+          <option value="Census">Census</option>
+          <option value="Christening">Christening</option>
+          <option value="CompiledGenealogy">Compiled Genealogy</option>
+          <option value="Confirmation">Confirmation</option>
+          <option value="Correspondence">Correspondence</option>
+          <option value="Death">Death</option>
+          <option value="Departure">Departure</option>
+          <option value="Divorce">Divorce</option>
+          <option value="Duplicate">Duplicate</option>
+          <option value="Draft">Draft</option>
+          <option value="Estate">Estate</option>
+          <option value="Index">Index</option>
+          <option value="IntendedMarriage">Intended Marriage</option>
+          <option value="Land">Land</option>
+          <option value="Legal">Legal</option>
+          <option value="Marriage">Marriage</option>
+          <option value="MarriageAffidavit">Marriage Affidavit</option>
+          <option value="MarriageAmendment">Marriage Amendment</option>
+          <option value="MarriageBanns">Marriage Banns</option>
+          <option value="MarriageConsent">Marriage Consent</option>
+          <option value="MarriageDuplicate">Marriage Duplicate</option>
+          <option value="MarriageLicense">Marriage License</option>
+          <option value="MarriageReturns">Marriage Returns</option>
+          <option value="Membership">Membership</option>
+          <option value="Migration">Migration</option>
+          <option value="Military">Military</option>
+          <option value="Naturalization">Naturalization</option>
+          <option value="Obituary">Obituary</option>
+          <option value="Passenger">Passenger</option>
+          <option value="Pension">Pension</option>
+          <option value="Probate">Probate</option>
+          <option value="RelatedDocument">RelatedDocument</option>
+          <option value="ReligiousCreeds">ReligiousCreeds</option>
+          <option value="Residence">Residence</option>
+          <option value="Roll">Roll</option>
+          <option value="Tax">Tax</option>
+          <option value="Vital">Vital</option>
+          <option value="VoterRegistration">VoterRegistration</option>
+          <option value="Will">Will</option>
+        </select>
+        <label for="edit-record-metadata-date">Date</label>
+        <input id="edit-record-metadata-date" type="text" class="form-control"/>
+        <label for="edit-record-metadata-place">Place</label>
+        <input id="edit-record-metadata-place" type="text" class="form-control"/>
+        <label for="edit-record-metadata-publisher">Publisher</label>
+        <input id="edit-record-metadata-publisher" type="text" class="form-control"/>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+        <button id="edit-edit-record-metadata" type="button" class="btn btn-primary">Update Metadata</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

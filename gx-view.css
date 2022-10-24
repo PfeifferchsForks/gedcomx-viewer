@@ -1,0 +1,84 @@
+.local-pid {
+    margin-right: 1ex;
+}
+
+.principal, .relative-type, .gender, .lang, .name-type {
+    margin-left: 1ex;
+}
+
+.gender-female {
+    background-color: deeppink;
+}
+
+.gender-male {
+    background-color: darkblue;
+}
+
+.gx-node-select {
+    cursor: crosshair;
+}
+
+.link-unstyled {
+    color: inherit;
+    text-decoration: inherit;
+}
+
+.trigger {
+    cursor: pointer;
+}
+
+.not {
+    text-decoration: line-through;
+}
+
+pre {
+    white-space: pre-wrap;
+    max-width: inherit;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+.drag-header {
+    cursor: move;
+    z-index: 10;
+    padding: 10px 4px 10px 10px;
+    background-color: #e2e7f8;
+}
+
+.drag-handle {
+    color: #b9bfd5;
+}
+
+.edit-section {
+    border: solid lightblue;
+    box-shadow: 2px 2px 4px lightgray;
+    padding:4px;
+    margin: 3px;
+    white-space: pre-wrap;
+}
+
+.selected-section {
+    background-color: rgba(255, 254, 228, 0.19);;
+}
+
+.section-drop-hover {
+    background-color: #e4fffb;
+}
+
+.hanging-indent {
+    padding-left: 22px;
+    text-indent: -22px;
+    margin-bottom: 0;
+}
+
+.sft-relationship {
+    color: #015b46;
+}
+
+.sft-person {
+    color: #0000b7;
+}
+
+.sft-tag {
+    color: #6c854e;
+}

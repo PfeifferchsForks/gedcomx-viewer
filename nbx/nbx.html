@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NBX Viewer</title>
+  <link rel="stylesheet" type="text/css" href="nbx-view.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script src="nbx-parse.js"></script>
+  <script src="nbx-view.js"></script>
+  <script src="../gx-util.js"></script>
+  <script src="../gx-fix.js"></script>
+  <script src="../bbox/bbox.js"></script>
+</head>
+<body>
+<div id="example">
+  
+</div>  <!-- example -->
+
+<div id="nbx-div">
+  <!-- This gets filled in -->
+</div>
+
+<script>
+  $(document).ready(function(){
+    let nbxText = null;
+    if (window.opener && window.opener.getCurrentGx()) {
+      window.opener.entityChildWindow = document;
+      let doc = window.opener.getCurrentGx();
+      doc = fixGedcomx(doc);
+      nbxText = findDocumentText(doc, "relexPostRules");
+      if (!nbxText) {
+        nbxText = findDocumentText(doc, "nbx");
+        if (nbxText) {
+          // Remove bounding boxes.
+          nbxText = nbxText.replace(/\[[0-9]*,[0-9]*:[0-9]*,[0-9]*] /g, "");
+        }
+      }
+    }
+    else {
+      nbxText = getSample();
+    }
+    let nbx = parseNbx(nbxText);
+    let nbxHtml = nbxToHtml(nbx);
+    $("#nbx-div").html(nbxHtml);
+  });
+</script>
+</body>
+</html>

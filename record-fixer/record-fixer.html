@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+
+Relationship Graph of a GedcomX Record displayed on a draggable rectangle floating on top of the image it came from.
+Set 'url' in command line of GedcomX Record persona.
+Set 'access_token" in command line with FamilySearch session ID.
+Upon reading the GedcomX record, it will look to see what image Ark the record came from, and load that image.
+
+ -->
+<head>
+  <meta charset="UTF-8">
+  <title>Record Fixer</title>
+  <!-- Image viewer includes -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="../bbox/bbox.css">
+  <script src="../bbox/singleImage.iife.min.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script src="../gx-util.js"></script>
+  <script src="../gx-view.js"></script>
+  <script src="../gx-fix.js"></script>
+  <script src="../nbx/nbx-parse.js"></script>
+  <script src="../bbox/bbox.js"></script>
+
+  <!-- Relationship graph includes -->
+  <link rel="stylesheet" type="text/css" href="../graph/graph.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+
+  <script src="../graph/model/model-util.js"></script>
+  <script src="../graph/model/PersonNode.js"></script>
+  <script src="../graph/model/FamilyNode.js"></script>
+  <script src="../graph/model/RelationshipGraph.js"></script>
+
+  <script src="../graph/view/Generation.js"></script>
+  <script src="../graph/view/LinkedHashSet.js"></script>
+  <script src="../graph/view/IntegerByRef.js"></script>
+  <script src="../graph/view/PersonBox.js"></script>
+  <script src="../graph/view/FamilyLine.js"></script>
+  <script src="../graph/view/ChartCompressor.js"></script>
+  <script src="../graph/view/RelationshipChart.js"></script>
+  <script src="../graph/view/RelChartBuilder.js"></script>
+  <script src="../graph/view/EditChart.js"></script>
+  <script src="../graph/graph.js"></script>
+
+  <!-- Record-fixer specific includes -->
+  <link rel="stylesheet" type="text/css" href="record-fixer.css">
+</head>
+<body>
+<!-- See the image viewer documentation at https://github.com/fs-webdev/image-viewer/blob/master/API.md -->
+<fs-single-image-viewer id="image-viewer"
+    style="flex: 1;"
+></fs-single-image-viewer>
+<div id="markers"></div>
+<div id="rel-chart"></div>
+
+
+<script type="text/javascript">
+  $(document).ready(function(){
+    // IMAGE VIEWER ==========================================================================
+    const viewer = document.querySelector("fs-single-image-viewer");
+    viewer.minZoom = 0.2;
+    // REL CHART =============================================================================
+    let params = window.location.search;
+    let urlParams = new URLSearchParams(params);
+    let url = urlParams.get('url');
+
+    if (!url) {
+      let personId = urlParams.get('personId');
+      if (personId) {
+        url = "https://api.familysearch.org/platform/records/personas/" + personId;
+      }
+      else {
+        url = "../graph/samples/Venezuela.json";
+      }
+    }
+
+    let sessionId = urlParams.get('access_token');
+    if (sessionId) {
+      url += "?access_token=" + sessionId;
+    }
+
+    $.ajax({
+      beforeSend: function(request) {
+        request.setRequestHeader("Accept", "application/x-gedcomx-v1+json");
+        request.setRequestHeader("User-Agent", "ACE Record Fixer");
+        request.setRequestHeader("Fs-User-Agent-Chain", "ACE Record Fixer");
+      },
+      dataType: "json",
+      url: url,
+      success:function(gedcomx){
+        let elementMap = overlayBoxes(viewer, gedcomx, sessionId);
+        currentRelChart = buildGraph(gedcomx, true, null, false, elementMap, true);
+      }
+    });
+    // $.getJSON(url, {format: "json"}, function(sampleGx){
+    //   currentRelChart = buildGraph(sampleGx, true);
+    // });
+    // $("#rel-chart").droppable({
+    //    drop: function(e) {
+    //      alert("Dropped on doc!");
+    //    }
+    // });
+  });
+
+  /**
+   * Redraw the chart with an updated GedcomX document.
+   * Note that record.html has "updateRecord(doc)" as well, so we're using the same function name for both.
+   * @param doc - GedcomX document to rebuild the chart with.
+   */
+  function updateRecord(doc) {
+    currentRelChart = buildGraph(doc, true, currentRelChart, false);
+  }
+
+</script>
+</body>
+</html>
